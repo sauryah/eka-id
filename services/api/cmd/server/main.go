@@ -64,9 +64,22 @@ func main() {
 		auditRepo = pgStore.Audit
 		dedupRepo = pgStore.Duplicates
 	} else {
-		log.Printf("[WARN] PostgreSQL not available (%v). Initializing resilient in-memory store with demo seeds...", err)
+		log.Printf("[WARN] PostgreSQL not available (%v). Initializing resilient disk-backed database...", err)
 		memStore := repository.NewMemoryStore()
-		seedMemoryStore(memStore)
+		dataPath := cfg.DataPath
+		loaded, loadErr := memStore.LoadFromFile(dataPath)
+		if loadErr != nil {
+			log.Printf("[WARN] Failed to load data from %s: %v. Re-initializing...", dataPath, loadErr)
+		}
+		if !loaded {
+			log.Printf("[INFO] No existing database file found at %s. Seeding initial demo identities...", dataPath)
+			seedMemoryStore(memStore)
+		} else {
+			log.Printf("[INFO] Successfully loaded permanent database from %s", dataPath)
+		}
+		memStore.SetPersistenceFile(dataPath)
+		_ = memStore.SaveToFile()
+
 		userRepo = memStore.Users
 		identRepo = memStore.Identities
 		profRepo = memStore.Profiles

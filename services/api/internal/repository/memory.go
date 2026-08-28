@@ -2,7 +2,11 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +16,8 @@ import (
 )
 
 type MemoryStore struct {
+	mu            *sync.RWMutex
+	filePath      string
 	Users         *MemoryUserRepo
 	Identities    *MemoryIdentityRepo
 	Profiles      *MemoryProfileRepo
@@ -40,6 +46,7 @@ func NewMemoryStore() *MemoryStore {
 	dupFlags := make(map[uuid.UUID]*domain.DuplicateFlag)
 
 	return &MemoryStore{
+		mu: sharedMu,
 		Users: &MemoryUserRepo{
 			mu:           sharedMu,
 			users:        usersMap,
@@ -88,16 +95,21 @@ type MemoryUserRepo struct {
 	mu           *sync.RWMutex
 	users        map[uuid.UUID]*domain.User
 	usersByEmail map[string]*domain.User
+	saveHook     func()
 }
 
 func (r *MemoryUserRepo) Create(ctx context.Context, u *domain.User) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if _, exists := r.usersByEmail[strings.ToLower(u.Email)]; exists {
+		r.mu.Unlock()
 		return errors.New("user already exists with email")
 	}
 	r.users[u.ID] = u
 	r.usersByEmail[strings.ToLower(u.Email)] = u
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -121,9 +133,12 @@ func (r *MemoryUserRepo) GetByEmail(ctx context.Context, email string) (*domain.
 
 func (r *MemoryUserRepo) Update(ctx context.Context, user *domain.User) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.users[user.ID] = user
 	r.usersByEmail[strings.ToLower(user.Email)] = user
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -133,17 +148,22 @@ type MemoryIdentityRepo struct {
 	identities         map[uuid.UUID]*domain.Identity
 	identitiesByEkaID  map[string]*domain.Identity
 	identitiesByUserID map[uuid.UUID]*domain.Identity
+	saveHook           func()
 }
 
 func (r *MemoryIdentityRepo) Create(ctx context.Context, ident *domain.Identity) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if _, exists := r.identitiesByEkaID[ident.EkaID]; exists {
+		r.mu.Unlock()
 		return errors.New("eka id already exists")
 	}
 	r.identities[ident.ID] = ident
 	r.identitiesByEkaID[ident.EkaID] = ident
 	r.identitiesByUserID[ident.UserID] = ident
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -194,24 +214,32 @@ func (r *MemoryIdentityRepo) List(ctx context.Context, limit, offset int) ([]*do
 
 func (r *MemoryIdentityRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if ident, exists := r.identities[id]; exists {
 		ident.Status = status
 		ident.UpdatedAt = time.Now().UTC()
+		r.mu.Unlock()
+		if r.saveHook != nil {
+			go r.saveHook()
+		}
 		return nil
 	}
+	r.mu.Unlock()
 	return ErrNotFound
 }
 
 func (r *MemoryIdentityRepo) UpdateVerificationLevel(ctx context.Context, id uuid.UUID, level string, verifiedAt *time.Time) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if ident, exists := r.identities[id]; exists {
 		ident.VerificationLevel = level
 		ident.VerifiedAt = verifiedAt
 		ident.UpdatedAt = time.Now().UTC()
+		r.mu.Unlock()
+		if r.saveHook != nil {
+			go r.saveHook()
+		}
 		return nil
 	}
+	r.mu.Unlock()
 	return ErrNotFound
 }
 
@@ -219,12 +247,16 @@ func (r *MemoryIdentityRepo) UpdateVerificationLevel(ctx context.Context, id uui
 type MemoryProfileRepo struct {
 	mu       *sync.RWMutex
 	profiles map[uuid.UUID]*domain.Profile
+	saveHook func()
 }
 
 func (r *MemoryProfileRepo) Create(ctx context.Context, p *domain.Profile) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.profiles[p.IdentityID] = p
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -279,8 +311,11 @@ func (r *MemoryProfileRepo) FindPotentialDuplicates(ctx context.Context, legalNa
 
 func (r *MemoryProfileRepo) Update(ctx context.Context, p *domain.Profile) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.profiles[p.IdentityID] = p
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -439,12 +474,16 @@ func (r *MemoryVerificationRepo) GetResultByRequestID(ctx context.Context, reque
 type MemoryCredentialRepo struct {
 	mu          *sync.RWMutex
 	credentials map[uuid.UUID][]*domain.Credential
+	saveHook    func()
 }
 
 func (r *MemoryCredentialRepo) Create(ctx context.Context, c *domain.Credential) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.credentials[c.IdentityID] = append(r.credentials[c.IdentityID], c)
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -469,14 +508,18 @@ func (r *MemoryCredentialRepo) GetByID(ctx context.Context, id uuid.UUID) (*doma
 
 // Audit Repo
 type MemoryAuditRepo struct {
-	mu     *sync.RWMutex
-	events *[]*domain.AuditEvent
+	mu       *sync.RWMutex
+	events   *[]*domain.AuditEvent
+	saveHook func()
 }
 
 func (r *MemoryAuditRepo) Record(ctx context.Context, ev *domain.AuditEvent) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	*r.events = append([]*domain.AuditEvent{ev}, *r.events...)
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -506,14 +549,18 @@ func (r *MemoryAuditRepo) List(ctx context.Context, limit, offset int, actorID *
 
 // Duplicate Repo
 type MemoryDuplicateRepo struct {
-	mu    *sync.RWMutex
-	flags map[uuid.UUID]*domain.DuplicateFlag
+	mu       *sync.RWMutex
+	flags    map[uuid.UUID]*domain.DuplicateFlag
+	saveHook func()
 }
 
 func (r *MemoryDuplicateRepo) CreateFlag(ctx context.Context, flag *domain.DuplicateFlag) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.flags[flag.ID] = flag
+	r.mu.Unlock()
+	if r.saveHook != nil {
+		go r.saveHook()
+	}
 	return nil
 }
 
@@ -531,13 +578,142 @@ func (r *MemoryDuplicateRepo) ListPending(ctx context.Context) ([]*domain.Duplic
 
 func (r *MemoryDuplicateRepo) ResolveFlag(ctx context.Context, id uuid.UUID, status string, reviewerID uuid.UUID) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if f, exists := r.flags[id]; exists {
 		f.Status = status
 		f.ReviewedBy = &reviewerID
 		now := time.Now().UTC()
 		f.ReviewedAt = &now
+		r.mu.Unlock()
+		if r.saveHook != nil {
+			go r.saveHook()
+		}
 		return nil
 	}
+	r.mu.Unlock()
 	return ErrNotFound
+}
+
+// -------------------------------------------------------------
+// Disk Persistence Support for Standalone Offline Operation
+// -------------------------------------------------------------
+
+type PersistedState struct {
+	Users          []*domain.User          `json:"users"`
+	Identities     []*domain.Identity      `json:"identities"`
+	Profiles       []*domain.Profile       `json:"profiles"`
+	Organizations  []*domain.Organization  `json:"organizations"`
+	Credentials    []*domain.Credential    `json:"credentials"`
+	DuplicateFlags []*domain.DuplicateFlag `json:"duplicate_flags"`
+	AuditEvents    []*domain.AuditEvent    `json:"audit_events"`
+}
+
+func (m *MemoryStore) SetPersistenceFile(path string) {
+	m.filePath = path
+	hook := func() {
+		_ = m.SaveToFile()
+	}
+	m.Users.saveHook = hook
+	m.Identities.saveHook = hook
+	m.Profiles.saveHook = hook
+	m.Credentials.saveHook = hook
+	m.Duplicates.saveHook = hook
+	m.Audit.saveHook = hook
+}
+
+func (m *MemoryStore) SaveToFile() error {
+	if m.filePath == "" {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	state := PersistedState{
+		Users:          make([]*domain.User, 0, len(m.Users.users)),
+		Identities:     make([]*domain.Identity, 0, len(m.Identities.identities)),
+		Profiles:       make([]*domain.Profile, 0, len(m.Profiles.profiles)),
+		Organizations:  make([]*domain.Organization, 0, len(m.Organizations.orgs)),
+		Credentials:    make([]*domain.Credential, 0),
+		DuplicateFlags: make([]*domain.DuplicateFlag, 0, len(m.Duplicates.flags)),
+		AuditEvents:    make([]*domain.AuditEvent, 0, len(*m.Audit.events)),
+	}
+
+	for _, u := range m.Users.users {
+		state.Users = append(state.Users, u)
+	}
+	for _, i := range m.Identities.identities {
+		state.Identities = append(state.Identities, i)
+	}
+	for _, p := range m.Profiles.profiles {
+		state.Profiles = append(state.Profiles, p)
+	}
+	for _, o := range m.Organizations.orgs {
+		state.Organizations = append(state.Organizations, o)
+	}
+	for _, credList := range m.Credentials.credentials {
+		state.Credentials = append(state.Credentials, credList...)
+	}
+	for _, f := range m.Duplicates.flags {
+		state.DuplicateFlags = append(state.DuplicateFlags, f)
+	}
+	state.AuditEvents = append(state.AuditEvents, (*m.Audit.events)...)
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(m.filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	tmpFile := fmt.Sprintf("%s.tmp.%d", m.filePath, time.Now().UnixNano())
+	if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpFile, m.filePath)
+}
+
+func (m *MemoryStore) LoadFromFile(path string) (bool, error) {
+	m.filePath = path
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	var state PersistedState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return false, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, u := range state.Users {
+		m.Users.users[u.ID] = u
+		m.Users.usersByEmail[strings.ToLower(u.Email)] = u
+	}
+	for _, i := range state.Identities {
+		m.Identities.identities[i.ID] = i
+		m.Identities.identitiesByEkaID[i.EkaID] = i
+		m.Identities.identitiesByUserID[i.UserID] = i
+	}
+	for _, p := range state.Profiles {
+		m.Profiles.profiles[p.IdentityID] = p
+	}
+	for _, o := range state.Organizations {
+		m.Organizations.orgs[o.ID] = o
+	}
+	for _, c := range state.Credentials {
+		m.Credentials.credentials[c.IdentityID] = append(m.Credentials.credentials[c.IdentityID], c)
+	}
+	for _, f := range state.DuplicateFlags {
+		m.Duplicates.flags[f.ID] = f
+	}
+	*m.Audit.events = append(*m.Audit.events, state.AuditEvents...)
+
+	return true, nil
 }

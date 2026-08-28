@@ -148,6 +148,7 @@ async function startBackend() {
     DB_SSL_MODE: 'disable',
     REDIS_HOST: process.env.REDIS_HOST || '127.0.0.1',
     REDIS_PORT: process.env.REDIS_PORT || '6380',
+    DATA_PATH: path.join(app.getPath('userData'), 'eka_database.json'),
     JWT_SECRET: 'eka_jwt_dev_super_secret_signing_key_32bytes_minimum_length_2026',
     VERIFY_URL_PREFIX: `http://127.0.0.1:${webPort}/verify`,
     CORS_ALLOWED_ORIGINS: '*',
