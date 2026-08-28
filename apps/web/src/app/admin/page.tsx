@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ShieldAlert, Users, Search, AlertTriangle, FileText, CheckCircle2,
-  XCircle, RefreshCw, Lock, Shield, UserX
+  XCircle, RefreshCw, Lock, Shield, UserX, Database, Server
 } from 'lucide-react';
 import {
   adminListIdentities, adminUpdateStatus, adminListDuplicates,
@@ -19,6 +19,65 @@ export default function AdminPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Database Settings Modal State
+  const [showDbModal, setShowDbModal] = useState(false);
+  const [dbLoading, setDbLoading] = useState(false);
+  const [dbMessage, setDbMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [dbForm, setDbForm] = useState({
+    db_host: 'localhost',
+    db_port: '5432',
+    db_name: 'eka_id',
+    db_user: 'postgres',
+    db_password: '',
+    db_ssl_mode: 'disable',
+  });
+
+  const openDbModal = async () => {
+    setShowDbModal(true);
+    setDbMessage(null);
+    try {
+      const res = await fetch('/api/system/db-config');
+      if (res.ok) {
+        const data = await res.json();
+        setDbForm(prev => ({
+          ...prev,
+          db_host: data.db_host || 'localhost',
+          db_port: data.db_port || '5432',
+          db_name: data.db_name || 'eka_id',
+          db_user: data.db_user || 'postgres',
+          db_password: data.db_password || '',
+          db_ssl_mode: data.db_ssl_mode || 'disable',
+        }));
+      }
+    } catch (e) {}
+  };
+
+  const handleSaveDbConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDbLoading(true);
+    setDbMessage(null);
+    try {
+      const res = await fetch('/api/system/db-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dbForm),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDbMessage({ type: 'success', text: data.message || 'Connected to PostgreSQL! Tables verified.' });
+        setTimeout(() => {
+          loadAdminData();
+        }, 1200);
+      } else {
+        setDbMessage({ type: 'error', text: data.error || 'Failed to connect to PostgreSQL.' });
+      }
+    } catch (err: any) {
+      setDbMessage({ type: 'error', text: err.message || 'Error updating database configuration.' });
+    } finally {
+      setDbLoading(false);
+    }
+  };
 
   useEffect(() => {
     loadAdminData();
@@ -104,13 +163,23 @@ export default function AdminPage() {
           </p>
         </div>
 
-        <button
-          onClick={loadAdminData}
-          className="flex items-center space-x-2 px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-700 shadow-sm transition"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          <span>Refresh Records</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={openDbModal}
+            className="flex items-center space-x-2 px-3.5 py-2 bg-slate-900 hover:bg-slate-800 rounded-lg text-xs font-semibold text-white shadow-sm transition"
+          >
+            <Database className="w-3.5 h-3.5 text-teal-400" />
+            <span>Database Settings</span>
+          </button>
+
+          <button
+            onClick={loadAdminData}
+            className="flex items-center space-x-2 px-3.5 py-2 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg text-xs font-semibold text-slate-700 shadow-sm transition"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Refresh Records</span>
+          </button>
+        </div>
       </div>
 
       {actionSuccess && (
@@ -411,6 +480,124 @@ export default function AdminPage() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Database Settings Modal */}
+      {showDbModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-700">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">PostgreSQL Connection Settings</h3>
+                  <p className="text-xs text-slate-500">Configure custom PostgreSQL credentials for EKA ID</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowDbModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {dbMessage && (
+              <div className={`mt-4 p-3 rounded-xl text-xs font-semibold flex items-center space-x-2 ${
+                dbMessage.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+              }`}>
+                {dbMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                <span>{dbMessage.text}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveDbConfig} className="mt-5 space-y-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Host / Server</label>
+                  <input
+                    type="text"
+                    required
+                    value={dbForm.db_host}
+                    onChange={e => setDbForm({ ...dbForm, db_host: e.target.value })}
+                    placeholder="localhost or 127.0.0.1"
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Port</label>
+                  <input
+                    type="text"
+                    required
+                    value={dbForm.db_port}
+                    onChange={e => setDbForm({ ...dbForm, db_port: e.target.value })}
+                    placeholder="5432"
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Database Name</label>
+                <input
+                  type="text"
+                  required
+                  value={dbForm.db_name}
+                  onChange={e => setDbForm({ ...dbForm, db_name: e.target.value })}
+                  placeholder="eka_id or postgres"
+                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Username</label>
+                  <input
+                    type="text"
+                    required
+                    value={dbForm.db_user}
+                    onChange={e => setDbForm({ ...dbForm, db_user: e.target.value })}
+                    placeholder="postgres"
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Password</label>
+                  <input
+                    type="password"
+                    value={dbForm.db_password}
+                    onChange={e => setDbForm({ ...dbForm, db_password: e.target.value })}
+                    placeholder="Your PostgreSQL password"
+                    className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                <p className="text-[11px] text-slate-400">Tables will be auto-created on connect.</p>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowDbModal(false)}
+                    className="px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={dbLoading}
+                    className="flex items-center space-x-1.5 px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold rounded-lg shadow-sm transition disabled:opacity-50"
+                  >
+                    {dbLoading && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{dbLoading ? 'Connecting...' : 'Save & Connect'}</span>
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       )}

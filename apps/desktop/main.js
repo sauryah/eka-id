@@ -55,11 +55,63 @@ function getBackendBinaryPath() {
   return path.join(__dirname, 'resources', 'bin', 'server.exe');
 }
 
+function getDbConfig() {
+  const configPath = path.join(app.getPath('userData'), 'db_config.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    } catch (e) {}
+  }
+  return null;
+}
+
 function startStaticServer(callback) {
   const staticDir = getStaticDir();
   console.log('[Desktop] Serving static assets from:', staticDir);
 
   staticServer = http.createServer((req, res) => {
+    // Database Configuration API for desktop UI
+    if (req.url === '/api/system/db-config') {
+      const configPath = path.join(app.getPath('userData'), 'db_config.json');
+      if (req.method === 'GET') {
+        let cfg = {
+          mode: 'auto',
+          db_host: 'localhost',
+          db_port: '5432',
+          db_name: 'eka_id',
+          db_user: 'postgres',
+          db_password: '',
+        };
+        if (fs.existsSync(configPath)) {
+          try {
+            cfg = { ...cfg, ...JSON.parse(fs.readFileSync(configPath, 'utf-8')) };
+          } catch (e) {}
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ configPath, ...cfg }));
+        return;
+      }
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', chunk => { body += chunk; });
+        req.on('end', async () => {
+          try {
+            const newConfig = JSON.parse(body);
+            fs.mkdirSync(path.dirname(configPath), { recursive: true });
+            fs.writeFileSync(configPath, JSON.stringify(newConfig, null, 2), 'utf-8');
+            stopBackend();
+            await startBackend();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, message: 'Database configuration saved and reconnected!' }));
+          } catch (e) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: e.message }));
+          }
+        });
+        return;
+      }
+    }
+
     let reqPath = req.url.split('?')[0];
     if (reqPath === '/') {
       reqPath = '/index.html';
@@ -135,17 +187,25 @@ async function startBackend() {
     return;
   }
 
+  const customConfig = getDbConfig();
+  const dbHost = (customConfig && customConfig.db_host) || process.env.DB_HOST || '127.0.0.1';
+  const dbPort = (customConfig && customConfig.db_port) || process.env.DB_PORT || '5433';
+  const dbUser = (customConfig && customConfig.db_user) || process.env.DB_USER || 'eka_admin';
+  const dbPassword = (customConfig && customConfig.db_password) || process.env.DB_PASSWORD || 'eka_secure_dev_pass_2026';
+  const dbName = (customConfig && customConfig.db_name) || process.env.DB_NAME || 'eka_id';
+  const dbSsl = (customConfig && customConfig.db_ssl_mode) || 'disable';
+
   const env = {
     ...process.env,
     ENVIRONMENT: 'development',
     SERVER_PORT: '8080',
     SERVER_HOST: '127.0.0.1',
-    DB_HOST: process.env.DB_HOST || '127.0.0.1',
-    DB_PORT: process.env.DB_PORT || '5433',
-    DB_USER: process.env.DB_USER || 'eka_admin',
-    DB_PASSWORD: process.env.DB_PASSWORD || 'eka_secure_dev_pass_2026',
-    DB_NAME: process.env.DB_NAME || 'eka_id',
-    DB_SSL_MODE: 'disable',
+    DB_HOST: dbHost,
+    DB_PORT: dbPort,
+    DB_USER: dbUser,
+    DB_PASSWORD: dbPassword,
+    DB_NAME: dbName,
+    DB_SSL_MODE: dbSsl,
     REDIS_HOST: process.env.REDIS_HOST || '127.0.0.1',
     REDIS_PORT: process.env.REDIS_PORT || '6380',
     DATA_PATH: path.join(app.getPath('userData'), 'eka_database.json'),

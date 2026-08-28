@@ -53,6 +53,11 @@ func main() {
 
 	if dbConnected {
 		pgStore := repository.NewPostgresStore(db)
+		if migErr := pgStore.AutoMigrate(context.Background()); migErr != nil {
+			log.Printf("[WARN] AutoMigrate warning: %v", migErr)
+		} else {
+			log.Printf("[INFO] PostgreSQL schema auto-migrated successfully.")
+		}
 		// We use PostgresStore directly
 		userRepo = pgStore.Users
 		identRepo = pgStore.Identities
