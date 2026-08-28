@@ -1,0 +1,155 @@
+openapi: 3.0.3
+info:
+  title: EKA ID — Universal Identity Platform API
+  version: 1.0.0
+  description: >
+    Independent, privacy-first digital identity API providing cryptographic ID generation,
+    zero-PII QR verification, and consent-driven selective disclosure.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Local Development Gateway
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Service healthy
+  /ready:
+    get:
+      summary: Readiness probe
+      responses:
+        '200':
+          description: Service ready
+  /auth/request-otp:
+    post:
+      summary: Request verification OTP for contact credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target:
+                  type: string
+                  example: user@example.com
+      responses:
+        '200':
+          description: OTP dispatched
+  /auth/register:
+    post:
+      summary: Register user, create identity and issue EKA ID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, phone, password, legal_name, date_of_birth, otp_code]
+              properties:
+                email:
+                  type: string
+                phone:
+                  type: string
+                password:
+                  type: string
+                legal_name:
+                  type: string
+                date_of_birth:
+                  type: string
+                  format: date
+                otp_code:
+                  type: string
+      responses:
+        '201':
+          description: Identity created successfully
+  /auth/login:
+    post:
+      summary: Authenticate user credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: JWT session token returned
+  /identities/me:
+    get:
+      summary: Retrieve authenticated user's identity & credentials
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User identity & profile
+  /identities/{ekaId}:
+    get:
+      summary: Public lookup for an EKA ID (zero PII exposed)
+      parameters:
+        - name: ekaId
+          in: path
+          required: true
+          schema:
+            type: string
+            example: EKA-7K4M-92PX
+      responses:
+        '200':
+          description: Public metadata
+  /qr/generate:
+    post:
+      summary: Generate ephemeral verification QR token
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                duration_minutes:
+                  type: integer
+      responses:
+        '200':
+          description: Verification token and URL
+  /qr/verify:
+    post:
+      summary: Public verification of a scanned QR token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: Verification claims result
+  /verification-requests:
+    post:
+      summary: Org initiates identity verification request
+      security:
+        - BearerAuth: []
+      responses:
+        '201':
+          description: Request recorded
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
