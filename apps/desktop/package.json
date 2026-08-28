@@ -1,0 +1,65 @@
+{
+  "name": "eka-id-desktop",
+  "version": "1.0.0",
+  "description": "EKA ID - Universal Digital Identity Platform Desktop Application",
+  "main": "main.js",
+  "author": "EKA ID Team <dev@eka.dev>",
+  "license": "SEE LICENSE IN LICENSE",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis --x64"
+  },
+  "build": {
+    "appId": "dev.eka.id.desktop",
+    "productName": "EKA ID",
+    "copyright": "Copyright © 2026 EKA ID",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "web/**/*",
+      "resources/**/*",
+      "build/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/bin/server.exe",
+        "to": "bin/server.exe"
+      },
+      {
+        "from": "web/out",
+        "to": "web/out"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "EKA ID",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "uninstallDisplayName": "EKA ID Universal Identity Platform",
+      "artifactName": "EKA-ID-Setup-${version}.${ext}"
+    }
+  },
+  "devDependencies": {
+    "electron": "^29.4.0",
+    "electron-builder": "^24.13.3"
+  }
+}
