@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ func setupTestServices() (*service.AuthService, *service.IdentityService, *servi
 	mem := repository.NewMemoryStore()
 	auditSvc := service.NewAuditService(mem.Audit)
 	idSvc := service.NewIdentityService(mem.Identities, mem.Profiles, auditSvc)
-	dedupSvc := service.NewDeduplicationService(mem.Profiles, mem.Duplicates, auditSvc)
+	dedupSvc := service.NewDeduplicationService(mem.Profiles, mem.Duplicates, mem.Identities, auditSvc)
 	authSvc := service.NewAuthService(mem.Users, idSvc, mem.Profiles, dedupSvc, auditSvc, "test-jwt-secret-32-chars-long!!")
 	qrSvc := service.NewQRService(mem.QR, mem.Identities, mem.Profiles, auditSvc, "https://id.eka.dev/verify")
 	verifSvc := service.NewVerificationService(mem.Verification, mem.Identities, mem.Profiles, auditSvc)
@@ -173,5 +174,71 @@ func TestAuditLog_Redaction(t *testing.T) {
 	}
 	if meta["otp_code"] != "[REDACTED]" {
 		t.Fatalf("OTP code was not redacted in audit log! Got: %v", meta["otp_code"])
+	}
+}
+
+func TestBiometricFacialDeduplication(t *testing.T) {
+	authSvc, _, _, _, _, mem := setupTestServices()
+	ctx := context.Background()
+
+	// 1. Register Person 1 with Face Embedding Vector A
+	faceVecA := []float64{0.15, -0.08, 0.42, -0.19, 0.22, 0.35, -0.11, 0.05, 0.28, -0.14, 0.31, -0.03}
+	_, err := authSvc.Register(ctx, service.RegistrationInput{
+		Email:       "original.user@example.com",
+		Password:    "Password123!",
+		LegalName:   "Original User",
+		DateOfBirth: "1990-01-01",
+		Phone:       "+919876500010",
+		OTPCode:     "123456",
+		Metadata: map[string]interface{}{
+			"face_embedding": faceVecA,
+		},
+	}, "127.0.0.1", "test-agent", "req-bio-1")
+	if err != nil {
+		t.Fatalf("Registration of user 1 failed: %v", err)
+	}
+
+	// 2. Register Person 2 with completely different name, email, phone, and DOB
+	// But WITH an identical or 99% similar face embedding vector!
+	faceVecB := []float64{0.151, -0.079, 0.419, -0.191, 0.221, 0.349, -0.109, 0.051, 0.281, -0.139, 0.309, -0.031}
+	_, err = authSvc.Register(ctx, service.RegistrationInput{
+		Email:       "fraudulent.clone@example.com",
+		Password:    "Password123!",
+		LegalName:   "Completely Different Name",
+		DateOfBirth: "2000-12-31",
+		Phone:       "+919876599999",
+		OTPCode:     "123456",
+		Metadata: map[string]interface{}{
+			"face_embedding": faceVecB,
+		},
+	}, "127.0.0.1", "test-agent", "req-bio-2")
+	if err != nil {
+		t.Fatalf("Registration of user 2 failed: %v", err)
+	}
+
+	// 3. Verify that Deduplication engine flagged the duplicate due to biometric face match!
+	flags, err := mem.Duplicates.ListPending(ctx)
+	if err != nil {
+		t.Fatalf("Failed to retrieve pending flags: %v", err)
+	}
+
+	if len(flags) == 0 {
+		t.Fatal("Expected biometric duplicate flag to be generated, but none was found!")
+	}
+
+	flag := flags[0]
+	if flag.ConfidenceScore < 85.0 {
+		t.Fatalf("Expected confidence score >= 85.0, got: %f", flag.ConfidenceScore)
+	}
+
+	foundBioReason := false
+	for _, reason := range flag.MatchReasons {
+		if strings.Contains(reason, "Biometric Face Match") {
+			foundBioReason = true
+			break
+		}
+	}
+	if !foundBioReason {
+		t.Fatalf("Expected Biometric Face Match reason in %v", flag.MatchReasons)
 	}
 }

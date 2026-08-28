@@ -83,7 +83,7 @@ func main() {
 	// Service Layer
 	auditSvc := service.NewAuditService(auditRepo)
 	identSvc := service.NewIdentityService(identRepo, profRepo, auditSvc)
-	dedupSvc := service.NewDeduplicationService(profRepo, dedupRepo, auditSvc)
+	dedupSvc := service.NewDeduplicationService(profRepo, dedupRepo, identRepo, auditSvc)
 	authSvc := service.NewAuthService(userRepo, identSvc, profRepo, dedupSvc, auditSvc, cfg.JWTSecret)
 	qrSvc := service.NewQRService(qrRepo, identRepo, profRepo, auditSvc, cfg.VerifyURLPrefix)
 	verifSvc := service.NewVerificationService(verifRepo, identRepo, profRepo, auditSvc)

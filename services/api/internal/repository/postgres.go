@@ -252,9 +252,13 @@ func (r *PostgresProfileRepo) FindByEmail(ctx context.Context, email string) ([]
 
 func (r *PostgresProfileRepo) FindPotentialDuplicates(ctx context.Context, legalName, dob, phone, email string) ([]*domain.Profile, error) {
 	query := `
-		SELECT identity_id, legal_name, TO_CHAR(date_of_birth, 'YYYY-MM-DD'), phone, email
+		SELECT identity_id, legal_name, TO_CHAR(date_of_birth, 'YYYY-MM-DD'), phone, email, profile_photo_url, metadata
 		FROM profiles
-		WHERE (phone = $1 AND $1 != '') OR (email = $2 AND $2 != '') OR (LOWER(legal_name) = LOWER($3) AND date_of_birth = $4::date)
+		WHERE (phone = $1 AND $1 != '')
+		   OR (email = $2 AND $2 != '')
+		   OR (LOWER(legal_name) = LOWER($3) AND date_of_birth = $4::date)
+		   OR (metadata ? 'face_embedding')
+		   OR (profile_photo_url IS NOT NULL AND profile_photo_url != '')
 	`
 	rows, err := r.db.QueryContext(ctx, query, phone, email, legalName, dob)
 	if err != nil {
@@ -265,10 +269,15 @@ func (r *PostgresProfileRepo) FindPotentialDuplicates(ctx context.Context, legal
 	var results []*domain.Profile
 	for rows.Next() {
 		var p domain.Profile
-		var pPhone, pEmail sql.NullString
-		if err := rows.Scan(&p.IdentityID, &p.LegalName, &p.DateOfBirth, &pPhone, &pEmail); err == nil {
+		var pPhone, pEmail, pPhoto sql.NullString
+		var metaBytes []byte
+		if err := rows.Scan(&p.IdentityID, &p.LegalName, &p.DateOfBirth, &pPhone, &pEmail, &pPhoto, &metaBytes); err == nil {
 			if pPhone.Valid { p.Phone = pPhone.String }
 			if pEmail.Valid { p.Email = pEmail.String }
+			if pPhoto.Valid { p.ProfilePhotoURL = pPhoto.String }
+			if len(metaBytes) > 0 {
+				_ = json.Unmarshal(metaBytes, &p.Metadata)
+			}
 			results = append(results, &p)
 		}
 	}

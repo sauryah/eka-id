@@ -173,4 +173,10 @@ type DuplicateFlag struct {
 	ReviewedBy           *uuid.UUID             `json:"reviewed_by,omitempty"`
 	ReviewedAt           *time.Time             `json:"reviewed_at,omitempty"`
 	CreatedAt            time.Time              `json:"created_at"`
+	PrimaryEkaID         string                 `json:"primary_eka_id,omitempty"`
+	PrimaryName          string                 `json:"primary_name,omitempty"`
+	PrimaryPhoto         string                 `json:"primary_photo,omitempty"`
+	SuspectedEkaID       string                 `json:"suspected_eka_id,omitempty"`
+	SuspectedName        string                 `json:"suspected_name,omitempty"`
+	SuspectedPhoto       string                 `json:"suspected_photo,omitempty"`
 }

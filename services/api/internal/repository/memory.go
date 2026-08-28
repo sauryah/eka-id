@@ -266,9 +266,11 @@ func (r *MemoryProfileRepo) FindPotentialDuplicates(ctx context.Context, legalNa
 	defer r.mu.RUnlock()
 	var matches []*domain.Profile
 	for _, p := range r.profiles {
+		hasBio := p.ProfilePhotoURL != "" || (p.Metadata != nil && p.Metadata["face_embedding"] != nil)
 		if (phone != "" && p.Phone == phone) ||
 			(email != "" && strings.EqualFold(p.Email, email)) ||
-			(strings.EqualFold(p.LegalName, legalName) && p.DateOfBirth == dob) {
+			(strings.EqualFold(p.LegalName, legalName) && p.DateOfBirth == dob) ||
+			hasBio {
 			matches = append(matches, p)
 		}
 	}

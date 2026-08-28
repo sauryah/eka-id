@@ -1,4 +1,4 @@
-﻿-- Development Seed Data for EKA ID
+-- Development Seed Data for EKA ID
 -- Clearly marked for local development and testing only
 
 -- Clean existing data
@@ -11,7 +11,7 @@ VALUES (
     'a0000000-0000-0000-0000-000000000001',
     'admin@eka.dev',
     '+919876543210',
-    '$2a$10$y5X4XkF8qE6n0V5Q8i2I2.hA21f8aZqE7e0zG/r6I6.1WqfH6WJ.K',
+    '$2a$10$M66rlEdbPSmBtyGp/LB5AObux5GOugkwEpv9k0vXmq0WdWxswXa3q',
     'SYSTEM_ADMIN',
     'ACTIVE'
 );
@@ -22,7 +22,7 @@ VALUES (
     'b0000000-0000-0000-0000-000000000002',
     'john.mathew@example.com',
     '+919876500001',
-    '$2a$10$y5X4XkF8qE6n0V5Q8i2I2.hA21f8aZqE7e0zG/r6I6.1WqfH6WJ.K',
+    '$2a$10$M66rlEdbPSmBtyGp/LB5AObux5GOugkwEpv9k0vXmq0WdWxswXa3q',
     'USER',
     'ACTIVE'
 );
@@ -39,7 +39,7 @@ VALUES (
 );
 
 -- 4. Insert Profile for John Mathew
-INSERT INTO profiles (identity_id, legal_name, date_of_birth, gender, profile_photo_url, phone, email, address_line1, city, state, postal_code, country)
+INSERT INTO profiles (identity_id, legal_name, date_of_birth, gender, profile_photo_url, phone, email, address_line1, city, state, postal_code, country, metadata)
 VALUES (
     'c0000000-0000-0000-0000-000000000003',
     'John Mathew',
@@ -52,7 +52,8 @@ VALUES (
     'Bengaluru',
     'Karnataka',
     '560034',
-    'India'
+    'India',
+    '{"face_embedding": [0.15, -0.08, 0.42, -0.19, 0.22, 0.35, -0.11, 0.05, 0.28, -0.14, 0.31, -0.03, 0.17, -0.25, 0.08, 0.19, -0.13, 0.06, 0.34, -0.18, 0.23, -0.09, 0.17, -0.22, 0.12, 0.07, -0.19, 0.31, -0.16, 0.27, -0.04, 0.14]}'::jsonb
 );
 
 -- 5. Insert Sample Organization
@@ -61,7 +62,7 @@ VALUES (
     'd0000000-0000-0000-0000-000000000004',
     'Acme Technologies Ltd.',
     'acme-tech',
-    '$2a$10$y5X4XkF8qE6n0V5Q8i2I2.hA21f8aZqE7e0zG/r6I6.1WqfH6WJ.K',
+    '$2a$10$M66rlEdbPSmBtyGp/LB5AObux5GOugkwEpv9k0vXmq0WdWxswXa3q',
     'ACTIVE',
     'https://api.acme.example.com/eka-webhook'
 );
@@ -72,7 +73,7 @@ VALUES (
     'e0000000-0000-0000-0000-000000000005',
     'sarah.recruiter@acme.example.com',
     '+919876599999',
-    '$2a$10$y5X4XkF8qE6n0V5Q8i2I2.hA21f8aZqE7e0zG/r6I6.1WqfH6WJ.K',
+    '$2a$10$M66rlEdbPSmBtyGp/LB5AObux5GOugkwEpv9k0vXmq0WdWxswXa3q',
     'ORG_ADMIN',
     'ACTIVE'
 );

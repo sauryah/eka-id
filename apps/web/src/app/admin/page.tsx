@@ -3,7 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ShieldAlert, Users, Search, AlertTriangle, FileText, CheckCircle2,
-  XCircle, RefreshCw, Lock, Shield
+  XCircle, RefreshCw, Lock, Shield, UserX
 } from 'lucide-react';
 import {
   adminListIdentities, adminUpdateStatus, adminListDuplicates,
@@ -66,6 +66,21 @@ export default function AdminPage() {
       setTimeout(() => setActionSuccess(null), 3000);
     } catch (err: any) {
       setError(err.message || 'Failed to resolve duplicate flag');
+    }
+  };
+
+  const handleSuspendAndResolve = async (flagId: string, suspectedId: string) => {
+    const token = localStorage.getItem('eka_token') || 'dev_admin_token';
+    try {
+      if (suspectedId) {
+        await adminUpdateStatus(token, suspectedId, 'SUSPENDED');
+      }
+      await adminResolveDuplicate(token, flagId, 'RESOLVED_DUPLICATE');
+      setActionSuccess('Suspected duplicate suspended and conflict confirmed.');
+      loadAdminData();
+      setTimeout(() => setActionSuccess(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to suspend duplicate identity');
     }
   };
 
@@ -225,47 +240,139 @@ export default function AdminPage() {
 
       {/* TAB 2: Duplicate Queue */}
       {activeTab === 'duplicates' && (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {duplicates.length === 0 ? (
             <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center text-slate-400 text-sm">
               <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
               No duplicate identity conflicts flagged.
             </div>
           ) : (
-            duplicates.map((dup) => (
-              <div key={dup.id} className="bg-white p-6 rounded-2xl border border-amber-200 shadow-sm space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <AlertTriangle className="w-5 h-5 text-amber-600" />
-                    <span className="font-bold text-slate-900 text-sm">Possible Duplicate Identity Detected</span>
+            duplicates.map((dup) => {
+              const isBiometric = dup.match_reasons?.some((r: string) => r.includes('Biometric') || r.includes('Face'));
+              return (
+                <div
+                  key={dup.id}
+                  className={`bg-white p-6 rounded-2xl border shadow-sm space-y-5 ${
+                    isBiometric ? 'border-purple-300 bg-gradient-to-br from-white to-purple-50/30' : 'border-amber-200'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div className="flex items-center space-x-2">
+                      {isBiometric ? (
+                        <span className="flex items-center space-x-1.5 px-3 py-1 rounded-full bg-purple-100 border border-purple-200 text-purple-800 text-xs font-bold uppercase tracking-wider">
+                          <span>🧬 Biometric Facial Match Flagged</span>
+                        </span>
+                      ) : (
+                        <span className="flex items-center space-x-1.5 px-3 py-1 rounded-full bg-amber-100 border border-amber-200 text-amber-800 text-xs font-bold uppercase tracking-wider">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <span>Demographic Duplicate Flagged</span>
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className={`px-3 py-1 rounded-lg text-xs font-black tracking-wide ${
+                        dup.confidence_score >= 85
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      Match Confidence: {dup.confidence_score}%
+                    </span>
                   </div>
-                  <span className="px-2.5 py-1 rounded bg-amber-100 text-amber-800 text-xs font-bold">
-                    Confidence: {dup.confidence_score}%
-                  </span>
-                </div>
 
-                <div className="text-xs text-slate-600 space-y-1">
-                  <p><strong>Primary Identity:</strong> <code className="font-mono">{dup.identity_id}</code></p>
-                  <p><strong>Suspected Duplicate:</strong> <code className="font-mono">{dup.suspected_duplicate_id}</code></p>
-                  <p><strong>Match Reasons:</strong> {dup.match_reasons?.join('; ')}</p>
-                </div>
+                  {/* Side-by-side identity comparison */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Primary Identity */}
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center space-x-4">
+                      {dup.primary_photo ? (
+                        <img
+                          src={dup.primary_photo}
+                          alt="Primary"
+                          className="w-16 h-16 rounded-xl object-cover border-2 border-teal-600 shadow-sm flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-xl bg-teal-800 text-white font-bold text-xl flex items-center justify-center flex-shrink-0">
+                          {dup.primary_name?.charAt(0) || 'U'}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <span className="text-[10px] uppercase font-bold text-teal-700 tracking-wider">
+                          Original Identity
+                        </span>
+                        <p className="font-bold text-slate-900 text-sm truncate">
+                          {dup.primary_name || 'Primary User'}
+                        </p>
+                        <p className="font-mono text-xs text-slate-500 truncate">
+                          {dup.primary_eka_id || dup.identity_id}
+                        </p>
+                      </div>
+                    </div>
 
-                <div className="flex items-center space-x-3 pt-2">
-                  <button
-                    onClick={() => handleResolveDuplicate(dup.id, 'RESOLVED_FALSE_POSITIVE')}
-                    className="px-4 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-lg transition"
-                  >
-                    Mark False Positive
-                  </button>
-                  <button
-                    onClick={() => handleResolveDuplicate(dup.id, 'RESOLVED_DUPLICATE')}
-                    className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-lg shadow-sm transition"
-                  >
-                    Confirm & Flag Duplicate
-                  </button>
+                    {/* Suspected Duplicate */}
+                    <div className="p-4 rounded-xl bg-rose-50/60 border border-rose-200 flex items-center space-x-4">
+                      {dup.suspected_photo ? (
+                        <img
+                          src={dup.suspected_photo}
+                          alt="Suspect"
+                          className="w-16 h-16 rounded-xl object-cover border-2 border-rose-500 shadow-sm flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-16 h-16 rounded-xl bg-rose-800 text-white font-bold text-xl flex items-center justify-center flex-shrink-0">
+                          {dup.suspected_name?.charAt(0) || 'S'}
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <span className="text-[10px] uppercase font-bold text-rose-700 tracking-wider">
+                          Suspected Duplicate / Clone
+                        </span>
+                        <p className="font-bold text-slate-900 text-sm truncate">
+                          {dup.suspected_name || 'Suspect User'}
+                        </p>
+                        <p className="font-mono text-xs text-slate-500 truncate">
+                          {dup.suspected_eka_id || dup.suspected_duplicate_id}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Match Reasons */}
+                  <div className="space-y-1.5 pt-1">
+                    <p className="text-xs font-semibold text-slate-700">Detection Match Signals:</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {dup.match_reasons?.map((reason: string, idx: number) => (
+                        <span
+                          key={idx}
+                          className={`text-xs px-2.5 py-1 rounded-md font-medium ${
+                            reason.includes('Biometric')
+                              ? 'bg-purple-100 text-purple-900 font-semibold'
+                              : 'bg-slate-100 text-slate-700'
+                          }`}
+                        >
+                          {reason}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center space-x-3 pt-3 border-t border-slate-100">
+                    <button
+                      onClick={() => handleResolveDuplicate(dup.id, 'RESOLVED_FALSE_POSITIVE')}
+                      className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-lg transition"
+                    >
+                      Mark False Positive
+                    </button>
+                    <button
+                      onClick={() => handleSuspendAndResolve(dup.id, dup.suspected_duplicate_id)}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-lg shadow-sm transition flex items-center space-x-1.5"
+                    >
+                      <UserX className="w-3.5 h-3.5" />
+                      <span>Confirm & Suspend Clone</span>
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       )}

@@ -2,7 +2,10 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import { Shield, ArrowRight, ArrowLeft, CheckCircle2, KeyRound, Mail, Phone, User, Calendar, Lock } from 'lucide-react';
+import {
+  Shield, ArrowRight, ArrowLeft, CheckCircle2, KeyRound, Mail,
+  Phone, User, Calendar, Lock, Camera, Sparkles, Scan, Image as ImageIcon
+} from 'lucide-react';
 import { requestOTP, registerUser } from '@/lib/api';
 
 export default function RegisterPage() {
@@ -20,8 +23,36 @@ export default function RegisterPage() {
   const [otpCode, setOtpCode] = useState('');
   const [devOtpHint, setDevOtpHint] = useState<string | null>(null);
 
+  // Biometric Facial Recognition State
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState(
+    'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&h=300&fit=crop&crop=faces'
+  );
+  const [faceEmbedding, setFaceEmbedding] = useState<number[]>([
+    0.21, -0.09, 0.38, -0.15, 0.19, 0.28, -0.12, 0.04, 0.22, -0.16, 0.29, -0.05, 0.18, -0.22, 0.07, 0.16,
+    -0.12, 0.08, 0.31, -0.14, 0.21, -0.08, 0.16, -0.19, 0.11, 0.05, -0.17, 0.29, -0.14, 0.25, -0.02, 0.12
+  ]);
+  const [bioMode, setBioMode] = useState<'unique' | 'john_clone'>('unique');
+
   // Registration Result
   const [createdEkaId, setCreatedEkaId] = useState<string | null>(null);
+
+  const setJohnBiometrics = () => {
+    setBioMode('john_clone');
+    setProfilePhotoUrl('https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=300&h=300&fit=crop&crop=faces');
+    // John Mathew's seed embedding vector:
+    setFaceEmbedding([
+      0.15, -0.08, 0.42, -0.19, 0.22, 0.35, -0.11, 0.05, 0.28, -0.14, 0.31, -0.03, 0.17, -0.25, 0.08, 0.19,
+      -0.13, 0.06, 0.34, -0.18, 0.23, -0.09, 0.17, -0.22, 0.12, 0.07, -0.19, 0.31, -0.16, 0.27, -0.04, 0.14
+    ]);
+  };
+
+  const setUniqueBiometrics = () => {
+    setBioMode('unique');
+    const randomSeed = Math.floor(Math.random() * 1000);
+    setProfilePhotoUrl(`https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=300&h=300&fit=crop&crop=faces&sig=${randomSeed}`);
+    const randomVec = Array.from({ length: 32 }, () => Number((Math.random() * 0.8 - 0.4).toFixed(3)));
+    setFaceEmbedding(randomVec);
+  };
 
   const handleRequestOtp = async () => {
     if (!email || !phone) {
@@ -61,6 +92,11 @@ export default function RegisterPage() {
         password,
         otp_code: otpCode,
         country: 'India',
+        profile_photo_url: profilePhotoUrl,
+        metadata: {
+          face_embedding: faceEmbedding,
+          biometric_source: 'FACIAL_DESCRIPTOR_V1',
+        },
       };
 
       const res = await registerUser(payload);
@@ -183,6 +219,78 @@ export default function RegisterPage() {
                   <option value="NON_BINARY">Non-Binary / Other</option>
                   <option value="PREFER_NOT_TO_SAY">Prefer not to say</option>
                 </select>
+              </div>
+
+              {/* Biometric Facial Recognition Feature */}
+              <div className="pt-2 border-t border-slate-100 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    Biometric Facial Enrollment
+                  </label>
+                  <span className="text-[10px] font-bold text-purple-700 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-full flex items-center space-x-1">
+                    <Scan className="w-3 h-3" />
+                    <span>Anti-Duplicate Vector</span>
+                  </span>
+                </div>
+
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <div className="flex items-center space-x-3">
+                    <div className="relative w-14 h-14 rounded-xl overflow-hidden border-2 border-teal-600 shadow-sm flex-shrink-0 bg-slate-200">
+                      <img
+                        src={profilePhotoUrl}
+                        alt="Biometric face"
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-teal-500/10 pointer-events-none border border-teal-400/40 rounded-xl"></div>
+                    </div>
+                    <div className="min-w-0 text-xs">
+                      <p className="font-bold text-slate-900 flex items-center space-x-1">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>32-D Facial Vector Extracted</span>
+                      </p>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        {bioMode === 'john_clone'
+                          ? '⚠️ Using John Mathew’s face (Will trigger duplicate alert)'
+                          : '✓ Unique biometric vector (Clean enrollment)'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Dev Helper buttons to test biometric duplicate detection */}
+                  <div className="pt-1 grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={setUniqueBiometrics}
+                      className={`p-2 text-left border rounded-lg text-xs transition ${
+                        bioMode === 'unique'
+                          ? 'bg-teal-50 border-teal-300 text-teal-900 font-semibold'
+                          : 'bg-white border-slate-200 hover:bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-1 font-bold">
+                        <Sparkles className="w-3.5 h-3.5 text-teal-600" />
+                        <span>Unique Face</span>
+                      </div>
+                      <div className="text-[10px] text-slate-500">Regular registration</div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={setJohnBiometrics}
+                      className={`p-2 text-left border rounded-lg text-xs transition ${
+                        bioMode === 'john_clone'
+                          ? 'bg-purple-50 border-purple-300 text-purple-900 font-semibold'
+                          : 'bg-white border-slate-200 hover:bg-purple-50 text-slate-600'
+                      }`}
+                    >
+                      <div className="flex items-center space-x-1 font-bold">
+                        <Camera className="w-3.5 h-3.5 text-purple-600" />
+                        <span>Clone John's Face</span>
+                      </div>
+                      <div className="text-[10px] text-purple-600 font-medium">Test duplicate flag</div>
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <button
