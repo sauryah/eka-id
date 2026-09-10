@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/sauryah/eka-id/services/api/internal/middleware"
 	"github.com/sauryah/eka-id/services/api/internal/repository"
 	"github.com/sauryah/eka-id/services/api/internal/service"
+	"github.com/sauryah/eka-id/services/api/internal/vc"
 )
 
 type Handlers struct {
@@ -21,6 +23,7 @@ type Handlers struct {
 	verifSvc  *service.VerificationService
 	dedupSvc  *service.DeduplicationService
 	auditSvc  *service.AuditService
+	vcSvc     *service.VCService
 	profRepo  repository.ProfileRepository
 	credRepo  repository.CredentialRepository
 }
@@ -32,6 +35,7 @@ func NewHandlers(
 	verifSvc *service.VerificationService,
 	dedupSvc *service.DeduplicationService,
 	auditSvc *service.AuditService,
+	vcSvc *service.VCService,
 	profRepo repository.ProfileRepository,
 	credRepo repository.CredentialRepository,
 ) *Handlers {
@@ -42,6 +46,7 @@ func NewHandlers(
 		verifSvc:  verifSvc,
 		dedupSvc:  dedupSvc,
 		auditSvc:  auditSvc,
+		vcSvc:     vcSvc,
 		profRepo:  profRepo,
 		credRepo:  credRepo,
 	}
@@ -72,6 +77,7 @@ func (h *Handlers) Health(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"status":    "UP",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"w3c_vc":    "COMPLIANT_V1_V2",
 	})
 }
 
@@ -79,6 +85,11 @@ func (h *Handlers) Ready(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"status":    "READY",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
+		"features": map[string]string{
+			"did_resolver": "ACTIVE",
+			"w3c_vc":       "ACTIVE",
+			"rate_limiter": "HYBRID_SLIDING_WINDOW",
+		},
 	})
 }
 
@@ -101,9 +112,9 @@ func (h *Handlers) RequestOTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	JSON(w, http.StatusOK, map[string]interface{}{
-		"message":   "Verification code dispatched",
-		"dev_otp":   otp, // Provided for local development & testing ease
-		"target":    body.Target,
+		"message": "Verification code dispatched",
+		"dev_otp": otp, // Provided for local development & testing ease
+		"target":  body.Target,
 	})
 }
 
@@ -182,7 +193,11 @@ func (h *Handlers) GetMyIdentity(w http.ResponseWriter, r *http.Request) {
 	profile, _ := h.profRepo.GetByIdentityID(r.Context(), identity.ID)
 	creds, _ := h.credRepo.ListByIdentityID(r.Context(), identity.ID)
 
+	// Enrich with W3C DID
+	did := fmt.Sprintf("did:eka:%s", identity.EkaID)
+
 	JSON(w, http.StatusOK, map[string]interface{}{
+		"did":         did,
 		"identity":    identity,
 		"profile":     profile,
 		"credentials": creds,
@@ -199,8 +214,9 @@ func (h *Handlers) GetPublicIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Strictly public view: only public status and verification level
+	// Strictly public view: public status, verification tier, and subject DID
 	JSON(w, http.StatusOK, map[string]interface{}{
+		"did":                fmt.Sprintf("did:eka:%s", ident.EkaID),
 		"eka_id":             ident.EkaID,
 		"status":             ident.Status,
 		"verification_level": ident.VerificationLevel,
@@ -219,8 +235,8 @@ func (h *Handlers) GenerateQR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Scopes         []string `json:"scopes"`
-		DurationMinutes int     `json:"duration_minutes"`
+		Scopes          []string `json:"scopes"`
+		DurationMinutes int      `json:"duration_minutes"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
@@ -265,7 +281,23 @@ func (h *Handlers) VerifyQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSON(w, http.StatusOK, result)
+	// Format W3C Verifiable Presentation
+	var vp *vc.VerifiablePresentation
+	if h.vcSvc != nil {
+		vp, _ = h.vcSvc.MintVerifiablePresentation(r.Context(), result.EkaID, result.VerificationLevel, result.DisclosedClaims)
+	}
+
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"status":                  result.Status,
+		"did":                     fmt.Sprintf("did:eka:%s", result.EkaID),
+		"eka_id":                  result.EkaID,
+		"verification_level":      result.VerificationLevel,
+		"verified_at":             result.VerifiedAt,
+		"legal_name":              result.LegalName,
+		"disclosed_claims":        result.DisclosedClaims,
+		"verification_date":       result.VerificationDate,
+		"verifiable_presentation": vp,
+	})
 }
 
 // --- Verification Request Handlers ---
@@ -343,9 +375,99 @@ func (h *Handlers) RespondVerificationRequest(w http.ResponseWriter, r *http.Req
 	}
 
 	JSON(w, http.StatusOK, map[string]interface{}{
-		"status":  "PROCESSED",
-		"result":  result,
+		"status":   "PROCESSED",
+		"result":   result,
 		"approved": body.Approved,
+	})
+}
+
+// --- W3C Verifiable Credentials & DID Handlers ---
+
+func (h *Handlers) GetDIDDocument(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	didURI := chi.URLParam(r, "did")
+	if didURI == "" {
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_INPUT", "DID parameter is required", reqID)
+		return
+	}
+
+	doc, err := h.vcSvc.ResolveDID(r.Context(), didURI)
+	if err != nil {
+		if err == service.ErrDIDNotFound {
+			ErrorResponse(w, http.StatusNotFound, "DID_NOT_FOUND", "Decentralized Identifier (DID) could not be resolved", reqID)
+			return
+		}
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_DID", err.Error(), reqID)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/did+ld+json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(doc)
+}
+
+func (h *Handlers) GetCredentialW3C(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	credIDStr := chi.URLParam(r, "id")
+	credID, err := uuid.Parse(credIDStr)
+	if err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_ID", "Invalid credential UUID", reqID)
+		return
+	}
+
+	cred, err := h.credRepo.GetByID(r.Context(), credID)
+	if err != nil || cred == nil {
+		ErrorResponse(w, http.StatusNotFound, "CREDENTIAL_NOT_FOUND", "Credential not found", reqID)
+		return
+	}
+
+	ident, err := h.identSvc.GetByID(r.Context(), cred.IdentityID)
+	if err != nil || ident == nil {
+		ErrorResponse(w, http.StatusNotFound, "IDENTITY_NOT_FOUND", "Subject identity not found", reqID)
+		return
+	}
+
+	profile, _ := h.profRepo.GetByIdentityID(r.Context(), ident.ID)
+
+	w3cVC, err := h.vcSvc.MintVerifiableCredential(r.Context(), cred, ident, profile)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "VC_MINT_FAILED", "Failed to mint W3C credential", reqID)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/credential+ld+json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(w3cVC)
+}
+
+func (h *Handlers) VerifyW3CCredential(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	var credential vc.VerifiableCredential
+	if err := json.NewDecoder(r.Body).Decode(&credential); err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_PAYLOAD", "Malformed W3C Verifiable Credential payload", reqID)
+		return
+	}
+
+	valid, statusReason, err := h.vcSvc.VerifyW3CCredential(r.Context(), &credential)
+	if err != nil || !valid {
+		JSON(w, http.StatusOK, map[string]interface{}{
+			"valid":         false,
+			"status":        "INVALID",
+			"reason":        statusReason,
+			"verified_at":   time.Now().UTC(),
+			"specification": "W3C Verifiable Credentials Data Model v1.1/v2.0",
+		})
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"valid":         true,
+		"status":        "VERIFIED",
+		"issuer":        credential.Issuer,
+		"subject":       credential.CredentialSubject.ID,
+		"issuance_date": credential.IssuanceDate,
+		"verified_at":   time.Now().UTC(),
+		"specification": "W3C Verifiable Credentials Data Model v1.1/v2.0",
 	})
 }
 
