@@ -62,12 +62,14 @@ export interface VerificationRequest {
 
 export interface QRVerificationResult {
   status: string;
+  did?: string;
   eka_id: string;
   verification_level: string;
   verified_at?: string;
   legal_name?: string;
   disclosed_claims: Record<string, any>;
   verification_date: string;
+  verifiable_presentation?: W3CVerifiablePresentation;
 }
 
 export interface AuditEvent {
@@ -84,6 +86,67 @@ export interface AuditEvent {
   metadata?: Record<string, any>;
   created_at: string;
 }
+
+// --- W3C Verifiable Credentials & DID Types ---
+
+export interface W3CIssuer {
+  id: string;
+  name?: string;
+}
+
+export interface W3CProof {
+  type: string;
+  created: string;
+  verificationMethod: string;
+  proofPurpose: string;
+  proofValue: string;
+}
+
+export interface W3CVerifiableCredential {
+  '@context': string[];
+  id: string;
+  type: string[];
+  issuer: W3CIssuer;
+  issuanceDate: string;
+  expirationDate?: string;
+  credentialSubject: {
+    id: string;
+    claims: Record<string, any>;
+  };
+  proof?: W3CProof;
+}
+
+export interface W3CVerifiablePresentation {
+  '@context': string[];
+  id: string;
+  type: string[];
+  holder: string;
+  verifiableCredential: W3CVerifiableCredential[];
+  proof?: W3CProof;
+}
+
+export interface DIDVerificationMethod {
+  id: string;
+  type: string;
+  controller: string;
+  publicKeyJwk?: Record<string, any>;
+}
+
+export interface DIDDocument {
+  '@context': string[];
+  id: string;
+  alsoKnownAs?: string[];
+  verificationMethod: DIDVerificationMethod[];
+  authentication: string[];
+  assertionMethod: string[];
+  service?: Array<{
+    id: string;
+    type: string;
+    serviceEndpoint: string;
+  }>;
+}
+
+// --- API Client Functions ---
 
 export async function requestOTP(target: string) {
   const res = await fetch(`${API_BASE}/api/v1/auth/request-otp`, {
@@ -197,6 +260,39 @@ export async function createVerificationRequest(token: string, payload: any) {
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error?.message || 'Failed to submit verification request');
+  }
+  return res.json();
+}
+
+// --- W3C Verifiable Credentials & DID APIs ---
+
+export async function getDIDDocument(didURI: string): Promise<DIDDocument> {
+  const res = await fetch(`${API_BASE}/api/v1/did/${encodeURIComponent(didURI)}`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Failed to resolve DID Document');
+  }
+  return res.json();
+}
+
+export async function getCredentialW3C(credentialId: string): Promise<W3CVerifiableCredential> {
+  const res = await fetch(`${API_BASE}/api/v1/credentials/${credentialId}/w3c`);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Failed to export W3C Verifiable Credential');
+  }
+  return res.json();
+}
+
+export async function verifyW3CCredential(credentialPayload: any) {
+  const res = await fetch(`${API_BASE}/api/v1/credentials/verify-w3c`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(credentialPayload),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'W3C Credential verification failed');
   }
   return res.json();
 }
