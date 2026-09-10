@@ -149,14 +149,21 @@ export default function DigitalEkaCard({ identity, profile, qrUrl }: DigitalEkaC
                   </span>
                   <span className="font-semibold text-slate-200">{profile?.country || 'India'}</span>
                 </div>
+                <div className="pt-1.5 border-t border-slate-800/80 flex flex-col space-y-0.5">
+                  <span className="text-[10px] uppercase font-bold text-teal-400 tracking-wider">Decentralized Identifier (DID)</span>
+                  <span className="font-mono text-[11px] text-slate-300 select-all truncate">
+                    did:eka:{identity?.eka_id}
+                  </span>
+                </div>
               </div>
 
               <div className="p-3 bg-slate-950/60 rounded-xl border border-slate-800 space-y-1.5 text-[11px] leading-relaxed text-slate-400">
-                <p className="font-semibold text-slate-200">Privacy & Security Guarantees:</p>
-                <ul className="list-disc list-inside space-y-1">
-                  <li>Public EKA ID contains no encoded personal information.</li>
-                  <li>QR code contains cryptographic signed short-lived tokens only.</li>
-                  <li>All verification checks are strictly logged in an immutable audit ledger.</li>
+                <p className="font-semibold text-slate-200">Standards & Cryptographic Guarantees:</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>W3C Verifiable Credentials Data Model v1.1/v2.0</li>
+                  <li>W3C Decentralized Identifiers (DID Core 1.0)</li>
+                  <li>HMAC-SHA256 / JWS Cryptographic Proofs</li>
+                  <li>Short-lived, scope-restricted ephemeral tokens</li>
                 </ul>
               </div>
 
