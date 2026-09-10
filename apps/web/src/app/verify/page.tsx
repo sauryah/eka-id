@@ -2,7 +2,10 @@
 
 import React, { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { ShieldCheck, XCircle, Clock, CheckCircle2, QrCode, Search, AlertCircle, ArrowRight } from 'lucide-react';
+import {
+  ShieldCheck, XCircle, Clock, CheckCircle2, QrCode, Search,
+  AlertCircle, ArrowRight, FileCode, Copy, Download
+} from 'lucide-react';
 import { verifyQRToken, QRVerificationResult } from '@/lib/api';
 
 function VerifyContent() {
@@ -13,6 +16,8 @@ function VerifyContent() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<QRVerificationResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'standard' | 'w3c'>('standard');
+  const [copiedText, setCopiedText] = useState(false);
 
   useEffect(() => {
     if (tokenParam) {
@@ -39,6 +44,22 @@ function VerifyContent() {
     }
   };
 
+  const handleCopyJSON = (jsonObj: any) => {
+    navigator.clipboard.writeText(JSON.stringify(jsonObj, null, 2));
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2000);
+  };
+
+  const handleDownloadJSON = (jsonObj: any, filename: string) => {
+    const blob = new Blob([JSON.stringify(jsonObj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="min-h-[80vh] py-12 px-4 sm:px-6 lg:px-8 max-w-3xl mx-auto">
       <div className="text-center mb-8">
@@ -49,7 +70,7 @@ function VerifyContent() {
           EKA ID Verification
         </h1>
         <p className="text-xs text-slate-500 mt-1">
-          Cryptographic token resolution with selective claim disclosure
+          Cryptographic token resolution • W3C Verifiable Credentials & DID Standards
         </p>
       </div>
 
@@ -111,49 +132,113 @@ function VerifyContent() {
             </div>
             <h2 className="text-2xl font-extrabold tracking-tight">Identity Verified</h2>
             <p className="text-xs text-emerald-100 font-medium">
-              EKA Digital Attestation Valid • Disclosed with User Consent
+              EKA Digital Attestation Valid • W3C VC 2.0 Tamper-Evident Proof
             </p>
           </div>
 
+          {/* View Mode Toggle */}
+          <div className="px-6 pt-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
+            <div className="flex space-x-2">
+              <button
+                onClick={() => setViewMode('standard')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-t-lg transition border-b-2 ${
+                  viewMode === 'standard'
+                    ? 'border-teal-700 text-teal-800 bg-white'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                Disclosed Claims
+              </button>
+              <button
+                onClick={() => setViewMode('w3c')}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold rounded-t-lg transition border-b-2 ${
+                  viewMode === 'w3c'
+                    ? 'border-teal-700 text-teal-800 bg-white'
+                    : 'border-transparent text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                <FileCode className="w-3.5 h-3.5" />
+                <span>W3C Verifiable Presentation (JSON-LD)</span>
+              </button>
+            </div>
+          </div>
+
           <div className="p-6 sm:p-8 space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
-                <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Public EKA ID</span>
-                <p className="font-mono text-base font-bold text-teal-800">{result.eka_id}</p>
-              </div>
+            {viewMode === 'standard' ? (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Public EKA ID</span>
+                    <p className="font-mono text-base font-bold text-teal-800">{result.eka_id}</p>
+                    <p className="font-mono text-[10px] text-slate-400">did:eka:{result.eka_id}</p>
+                  </div>
 
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
-                <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Verification Level</span>
-                <p className="text-sm font-bold text-slate-900">{result.verification_level?.replace(/_/g, ' ')}</p>
-              </div>
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Verification Level</span>
+                    <p className="text-sm font-bold text-slate-900">{result.verification_level?.replace(/_/g, ' ')}</p>
+                  </div>
 
-              {result.legal_name && (
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
-                  <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Legal Name</span>
-                  <p className="text-sm font-bold text-slate-900">{result.legal_name}</p>
+                  {result.legal_name && (
+                    <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                      <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Legal Name</span>
+                      <p className="text-sm font-bold text-slate-900">{result.legal_name}</p>
+                    </div>
+                  )}
+
+                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
+                    <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Verified Timestamp</span>
+                    <p className="text-sm font-bold text-slate-900">
+                      {result.verified_at ? new Date(result.verified_at).toLocaleDateString() : 'Active'}
+                    </p>
+                  </div>
                 </div>
-              )}
 
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-100 space-y-1">
-                <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Verified Timestamp</span>
-                <p className="text-sm font-bold text-slate-900">
-                  {result.verified_at ? new Date(result.verified_at).toLocaleDateString() : 'Active'}
-                </p>
-              </div>
-            </div>
+                {/* Selectively Disclosed Claims */}
+                <div className="space-y-3 pt-2">
+                  <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700">
+                    Authorized Disclosed Claims
+                  </h4>
+                  <div className="p-4 rounded-xl bg-slate-900 text-teal-300 font-mono text-xs overflow-x-auto">
+                    <pre>{JSON.stringify(result.disclosed_claims, null, 2)}</pre>
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* W3C Verifiable Presentation View */
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-bold text-slate-900 text-sm">W3C Verifiable Presentation</h4>
+                    <p className="text-xs text-slate-500">Includes cryptographic proof, subject DID, and issuer signature.</p>
+                  </div>
+                  {result.verifiable_presentation && (
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleCopyJSON(result.verifiable_presentation)}
+                        className="flex items-center space-x-1 px-2.5 py-1 rounded border border-slate-200 bg-slate-50 text-slate-700 text-xs font-semibold hover:bg-slate-100 transition"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>{copiedText ? 'Copied!' : 'Copy JSON'}</span>
+                      </button>
+                      <button
+                        onClick={() => handleDownloadJSON(result.verifiable_presentation, `verifiable-presentation-${result.eka_id}.json`)}
+                        className="flex items-center space-x-1 px-2.5 py-1 rounded bg-teal-700 text-white text-xs font-semibold hover:bg-teal-800 transition shadow-sm"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Download</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-            {/* Selectively Disclosed Claims */}
-            <div className="space-y-3 pt-2">
-              <h4 className="font-bold text-xs uppercase tracking-wider text-slate-700">
-                Authorized Disclosed Claims
-              </h4>
-              <div className="p-4 rounded-xl bg-slate-900 text-teal-300 font-mono text-xs overflow-x-auto">
-                <pre>{JSON.stringify(result.disclosed_claims, null, 2)}</pre>
+                <div className="p-4 rounded-xl bg-slate-950 text-teal-300 font-mono text-xs overflow-x-auto max-h-96 shadow-inner">
+                  <pre>{JSON.stringify(result.verifiable_presentation || result, null, 2)}</pre>
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="p-3 bg-slate-50 rounded-lg text-[11px] text-slate-500 text-center border border-slate-100">
-              Verified on {new Date(result.verification_date).toLocaleString()} • Audit Event Logged
+              Verified on {new Date(result.verification_date).toLocaleString()} • W3C VC 2.0 Compliant • Audit Event Logged
             </div>
           </div>
         </div>
