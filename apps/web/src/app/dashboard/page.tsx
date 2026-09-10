@@ -3,16 +3,18 @@
 import React, { useEffect, useState } from 'react';
 import {
   Shield, QrCode, CheckCircle2, Award, Clock, Eye, Sliders,
-  Check, X, AlertCircle, Lock, Download, Printer, UserCheck, RefreshCw, Key
+  Check, X, AlertCircle, Lock, Download, Printer, UserCheck, RefreshCw, Key,
+  FileCode, ExternalLink, Copy
 } from 'lucide-react';
 import DigitalEkaCard from '@/components/DigitalEkaCard';
 import {
   getMyIdentity, generateQRToken, getPendingVerificationRequests,
-  respondVerificationRequest, Identity, Profile, Credential, VerificationRequest
+  respondVerificationRequest, getCredentialW3C, getDIDDocument,
+  Identity, Profile, Credential, VerificationRequest, W3CVerifiableCredential, DIDDocument
 } from '@/lib/api';
 
 export default function DashboardPage() {
-  const [activeTab, setActiveTab] = useState<'identity' | 'card' | 'qr' | 'requests' | 'credentials' | 'activity' | 'privacy'>('identity');
+  const [activeTab, setActiveTab] = useState<'identity' | 'card' | 'qr' | 'requests' | 'credentials' | 'privacy'>('identity');
   const [loading, setLoading] = useState(true);
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -28,6 +30,13 @@ export default function DashboardPage() {
 
   // Request response feedback
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+
+  // W3C VC Modal & DID Modal State
+  const [selectedVC, setSelectedVC] = useState<W3CVerifiableCredential | null>(null);
+  const [loadingVC, setLoadingVC] = useState(false);
+  const [didDoc, setDidDoc] = useState<DIDDocument | null>(null);
+  const [loadingDID, setLoadingDID] = useState(false);
+  const [copiedText, setCopiedText] = useState(false);
 
   useEffect(() => {
     loadDashboardData();
@@ -93,13 +102,53 @@ export default function DashboardPage() {
     try {
       await respondVerificationRequest(token, requestId, approved);
       setActionSuccess(approved ? 'Verification request approved with selective claims.' : 'Verification request denied.');
-      // Refresh requests list
       const updated = await getPendingVerificationRequests(token);
       setRequests(updated || []);
       setTimeout(() => setActionSuccess(null), 4000);
     } catch (err: any) {
       setError(err.message || 'Failed to process request');
     }
+  };
+
+  const handleInspectW3C = async (credId: string) => {
+    setLoadingVC(true);
+    try {
+      const vcData = await getCredentialW3C(credId);
+      setSelectedVC(vcData);
+    } catch (err: any) {
+      setError(err.message || 'Failed to load W3C credential');
+    } finally {
+      setLoadingVC(false);
+    }
+  };
+
+  const handleViewDID = async () => {
+    if (!identity?.eka_id) return;
+    setLoadingDID(true);
+    try {
+      const doc = await getDIDDocument(`did:eka:${identity.eka_id}`);
+      setDidDoc(doc);
+    } catch (err: any) {
+      setError(err.message || 'Failed to resolve DID document');
+    } finally {
+      setLoadingDID(false);
+    }
+  };
+
+  const handleCopyJSON = (jsonObj: any) => {
+    navigator.clipboard.writeText(JSON.stringify(jsonObj, null, 2));
+    setCopiedText(true);
+    setTimeout(() => setCopiedText(false), 2000);
+  };
+
+  const handleDownloadJSON = (jsonObj: any, filename: string) => {
+    const blob = new Blob([JSON.stringify(jsonObj, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const toggleScope = (scope: string) => {
@@ -169,6 +218,18 @@ export default function DashboardPage() {
                 </span>
               </div>
               <p className="text-slate-300 text-xs mt-0.5">{profile?.email} • {profile?.phone}</p>
+              <div className="mt-1.5 flex items-center space-x-2">
+                <span className="text-[11px] font-mono text-teal-300 bg-slate-950/60 px-2 py-0.5 rounded border border-teal-500/30">
+                  did:eka:{identity?.eka_id}
+                </span>
+                <button
+                  onClick={handleViewDID}
+                  className="text-[11px] text-teal-300 hover:text-white underline font-medium flex items-center space-x-1"
+                >
+                  <FileCode className="w-3 h-3" />
+                  <span>W3C DID Doc</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -439,11 +500,20 @@ export default function DashboardPage() {
       {/* TAB CONTENT 5: Credentials */}
       {activeTab === 'credentials' && (
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-          <div>
-            <h3 className="font-bold text-slate-900 text-base">Verifiable Credentials</h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Cryptographically anchored claims issued by trusted employers, universities, and institutions.
-            </p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-slate-900 text-base">Verifiable Credentials (W3C Standard)</h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Cryptographically signed claims compliant with the W3C Verifiable Credentials Data Model v1.1/v2.0.
+              </p>
+            </div>
+            <button
+              onClick={handleViewDID}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-xs font-semibold hover:bg-slate-100 transition shadow-sm"
+            >
+              <FileCode className="w-3.5 h-3.5 text-teal-700" />
+              <span>Resolve Subject DID Document</span>
+            </button>
           </div>
 
           {credentials.length === 0 ? (
@@ -453,21 +523,34 @@ export default function DashboardPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {credentials.map((cred) => (
-                <div key={cred.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">{cred.type}</span>
-                    <span className="px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 font-semibold text-[10px]">
-                      {cred.status}
-                    </span>
-                  </div>
-                  <p className="font-semibold text-slate-800 text-sm">{cred.issuer_name}</p>
-                  <p className="text-slate-500">Method: {cred.verification_method}</p>
-                  {cred.metadata && (
-                    <div className="p-2 rounded bg-white border border-slate-100 font-mono text-[11px] text-slate-600">
-                      {JSON.stringify(cred.metadata)}
+                <div key={cred.id} className="p-5 rounded-xl border border-slate-200 bg-slate-50 space-y-3 text-xs flex flex-col justify-between">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">{cred.type}</span>
+                      <span className="px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 font-semibold text-[10px]">
+                        {cred.status}
+                      </span>
                     </div>
-                  )}
-                  <p className="text-[10px] text-slate-400">Issued: {new Date(cred.issued_at).toLocaleDateString()}</p>
+                    <p className="font-semibold text-slate-800 text-sm">{cred.issuer_name}</p>
+                    <p className="text-slate-500">Method: {cred.verification_method}</p>
+                    {cred.metadata && (
+                      <div className="p-2 rounded bg-white border border-slate-100 font-mono text-[11px] text-slate-600">
+                        {JSON.stringify(cred.metadata)}
+                      </div>
+                    )}
+                    <p className="text-[10px] text-slate-400">Issued: {new Date(cred.issued_at).toLocaleDateString()}</p>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200 flex items-center justify-between gap-2">
+                    <button
+                      onClick={() => handleInspectW3C(cred.id)}
+                      className="inline-flex items-center space-x-1 px-2.5 py-1 rounded bg-teal-700 text-white font-semibold text-[11px] hover:bg-teal-800 transition"
+                    >
+                      <FileCode className="w-3 h-3" />
+                      <span>Inspect W3C VC</span>
+                    </button>
+                    <span className="text-[10px] text-slate-400 font-mono">W3C VC JSON-LD</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -494,9 +577,9 @@ export default function DashboardPage() {
             </div>
 
             <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-              <h4 className="font-bold text-slate-900 text-sm">Zero-Knowledge ID Separation</h4>
+              <h4 className="font-bold text-slate-900 text-sm">Decentralized Identifiers (DID)</h4>
               <p className="leading-relaxed">
-                Your public identifier (<code>{identity?.eka_id}</code>) has zero correlation with your internal database primary key or personal identification numbers.
+                Your public identifier (<code>did:eka:{identity?.eka_id}</code>) conforms to W3C DID Core 1.0. It resolves cryptographically without exposing backend database keys.
               </p>
             </div>
 
@@ -508,10 +591,110 @@ export default function DashboardPage() {
             </div>
 
             <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-              <h4 className="font-bold text-slate-900 text-sm">Auditability & Right of Access</h4>
+              <h4 className="font-bold text-slate-900 text-sm">W3C Verifiable Credentials</h4>
               <p className="leading-relaxed">
-                Every external request for your identity is permanently recorded in your audit trail. You have the right to review all actors who interacted with your credential.
+                All claims carry cryptographic tamper-evident signatures (HMAC-SHA256 / JWS proofs), allowing verifiers worldwide to validate credential integrity.
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* W3C VC Inspector Modal */}
+      {selectedVC && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <FileCode className="w-5 h-5 text-teal-700" />
+                <h3 className="font-bold text-slate-900 text-base">W3C Verifiable Credential (JSON-LD)</h3>
+              </div>
+              <button
+                onClick={() => setSelectedVC(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="my-4 p-4 rounded-xl bg-slate-950 text-teal-300 font-mono text-xs overflow-y-auto flex-grow shadow-inner">
+              <pre>{JSON.stringify(selectedVC, null, 2)}</pre>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handleCopyJSON(selectedVC)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{copiedText ? 'Copied!' : 'Copy JSON'}</span>
+                </button>
+                <button
+                  onClick={() => handleDownloadJSON(selectedVC, `w3c-credential-${selectedVC.id.split(':').pop()}.json`)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold shadow-sm transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download JSON-LD</span>
+                </button>
+              </div>
+
+              <button
+                onClick={() => setSelectedVC(null)}
+                className="px-4 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DID Document Modal */}
+      {didDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2">
+                <FileCode className="w-5 h-5 text-teal-700" />
+                <h3 className="font-bold text-slate-900 text-base">W3C Decentralized Identifier (DID) Document</h3>
+              </div>
+              <button
+                onClick={() => setDidDoc(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="my-4 p-4 rounded-xl bg-slate-950 text-cyan-300 font-mono text-xs overflow-y-auto flex-grow shadow-inner">
+              <pre>{JSON.stringify(didDoc, null, 2)}</pre>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => handleCopyJSON(didDoc)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{copiedText ? 'Copied!' : 'Copy DID Doc'}</span>
+                </button>
+                <button
+                  onClick={() => handleDownloadJSON(didDoc, `did-document.json`)}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold shadow-sm transition"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download DID JSON</span>
+                </button>
+              </div>
+
+              <button
+                onClick={() => setDidDoc(null)}
+                className="px-4 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold transition"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
