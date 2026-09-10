@@ -58,7 +58,6 @@ func main() {
 		} else {
 			log.Printf("[INFO] PostgreSQL schema auto-migrated successfully.")
 		}
-		// We use PostgresStore directly
 		userRepo = pgStore.Users
 		identRepo = pgStore.Identities
 		profRepo = pgStore.Profiles
@@ -96,8 +95,6 @@ func main() {
 		dedupRepo = memStore.Duplicates
 	}
 
-	_ = orgRepo // preserve for future multi-tenant org routing
-
 	// Service Layer
 	auditSvc := service.NewAuditService(auditRepo)
 	identSvc := service.NewIdentityService(identRepo, profRepo, auditSvc)
@@ -105,9 +102,18 @@ func main() {
 	authSvc := service.NewAuthService(userRepo, identSvc, profRepo, dedupSvc, auditSvc, cfg.JWTSecret)
 	qrSvc := service.NewQRService(qrRepo, identRepo, profRepo, auditSvc, cfg.VerifyURLPrefix)
 	verifSvc := service.NewVerificationService(verifRepo, identRepo, profRepo, auditSvc)
+	vcSvc := service.NewVCService(identRepo, profRepo, orgRepo, credRepo, auditSvc, cfg.JWTSecret, cfg.VerifyURLPrefix)
 
 	// Handler Layer
-	h := handler.NewHandlers(authSvc, identSvc, qrSvc, verifSvc, dedupSvc, auditSvc, profRepo, credRepo)
+	h := handler.NewHandlers(authSvc, identSvc, qrSvc, verifSvc, dedupSvc, auditSvc, vcSvc, profRepo, credRepo)
+
+	// Rate Limiter Setup (Hybrid: Redis with In-Memory fallback)
+	rateLimiter := middleware.NewHybridRateLimiter(cfg.RedisHost, cfg.RedisPort, cfg.RedisPassword)
+	if err := rateLimiter.Ping(context.Background()); err != nil {
+		log.Printf("[INFO] Redis not available (%v) — using resilient in-memory sliding-window rate limiter", err)
+	} else {
+		log.Printf("[INFO] Connected to Redis on %s:%s for distributed rate limiting", cfg.RedisHost, cfg.RedisPort)
+	}
 
 	// Router Setup
 	r := chi.NewRouter()
@@ -116,8 +122,8 @@ func main() {
 	r.Use(middleware.RequestID)
 	r.Use(middleware.CORS(cfg.CorsAllowedOrigins))
 
-	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
-	r.Use(rateLimiter.Limit)
+	// Global general rate limit (100 req/min)
+	r.Use(rateLimiter.Limit(100, time.Minute))
 
 	// Health & System
 	r.Get("/health", h.Health)
@@ -126,14 +132,25 @@ func main() {
 
 	// Public API v1
 	r.Route("/api/v1", func(r chi.Router) {
-		// Auth
-		r.Post("/auth/request-otp", h.RequestOTP)
-		r.Post("/auth/register", h.Register)
-		r.Post("/auth/login", h.Login)
+		// Auth (Stricter rate limiting: 15 req/min)
+		r.Group(func(r chi.Router) {
+			r.Use(rateLimiter.Limit(15, time.Minute))
+			r.Post("/auth/request-otp", h.RequestOTP)
+			r.Post("/auth/register", h.Register)
+			r.Post("/auth/login", h.Login)
+		})
 
-		// Public Verification & Identity Lookup
-		r.Get("/identities/{ekaId}", h.GetPublicIdentity)
-		r.Post("/qr/verify", h.VerifyQR)
+		// Public Verification & Identity Lookup (60 req/min)
+		r.Group(func(r chi.Router) {
+			r.Use(rateLimiter.Limit(60, time.Minute))
+			r.Get("/identities/{ekaId}", h.GetPublicIdentity)
+			r.Post("/qr/verify", h.VerifyQR)
+		})
+
+		// W3C Verifiable Credentials & DID Standards
+		r.Get("/did/{did}", h.GetDIDDocument)
+		r.Get("/credentials/{id}/w3c", h.GetCredentialW3C)
+		r.Post("/credentials/verify-w3c", h.VerifyW3CCredential)
 
 		// Authenticated User Endpoints
 		r.Group(func(r chi.Router) {
@@ -230,13 +247,13 @@ func seedMemoryStore(m *repository.MemoryStore) {
 				0.12, 0.07, -0.19, 0.31, -0.16, 0.27, -0.04, 0.14,
 			},
 		},
-		CreatedAt:       verifiedAt,
-		UpdatedAt:       time.Now().UTC(),
+		CreatedAt: verifiedAt,
+		UpdatedAt: time.Now().UTC(),
 	})
 
 	// Sample Credential
 	_ = m.Credentials.Create(ctx, &domain.Credential{
-		ID:                 uuid.New(),
+		ID:                 uuid.MustParse("e0000000-0000-0000-0000-000000000005"),
 		IdentityID:         johnIdentID,
 		Type:               "EMPLOYMENT",
 		IssuerName:         "Acme Technologies Ltd.",
