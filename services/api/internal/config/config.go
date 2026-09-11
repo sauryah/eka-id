@@ -31,7 +31,7 @@ func Load() *Config {
 		ServerHost:         getEnv("SERVER_HOST", "0.0.0.0"),
 		CorsAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 		DBHost:             getEnv("DB_HOST", "localhost"),
-		DBPort:             getEnv("DB_PORT", "5433"),
+		DBPort:             getEnv("DB_PORT", "5434"),
 		DBUser:             getEnv("DB_USER", "eka_admin"),
 		DBPassword:         getEnv("DB_PASSWORD", "eka_secure_dev_pass_2026"),
 		DBName:             getEnv("DB_NAME", "eka_id"),
