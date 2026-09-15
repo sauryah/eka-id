@@ -35,6 +35,8 @@ func main() {
 	var credRepo repository.CredentialRepository
 	var auditRepo repository.AuditRepository
 	var dedupRepo repository.DuplicateRepository
+	var docRepo repository.DocumentRepository
+	var amendRepo repository.AmendmentRepository
 
 	// Attempt PostgreSQL connection with retry loop
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
@@ -80,6 +82,8 @@ func main() {
 		credRepo = pgStore.Credentials
 		auditRepo = pgStore.Audit
 		dedupRepo = pgStore.Duplicates
+		docRepo = pgStore.Documents
+		amendRepo = pgStore.Amendments
 	} else {
 		log.Printf("[WARN] PostgreSQL not available (%v). Initializing resilient disk-backed database...", lastPingErr)
 		memStore := repository.NewMemoryStore()
@@ -106,6 +110,8 @@ func main() {
 		credRepo = memStore.Credentials
 		auditRepo = memStore.Audit
 		dedupRepo = memStore.Duplicates
+		docRepo = memStore.Documents
+		amendRepo = memStore.Amendments
 	}
 
 	// Service Layer
@@ -116,9 +122,10 @@ func main() {
 	qrSvc := service.NewQRService(qrRepo, identRepo, profRepo, auditSvc, cfg.VerifyURLPrefix)
 	verifSvc := service.NewVerificationService(verifRepo, identRepo, profRepo, auditSvc)
 	vcSvc := service.NewVCService(identRepo, profRepo, orgRepo, credRepo, auditSvc, cfg.JWTSecret, cfg.VerifyURLPrefix)
+	amendSvc := service.NewAmendmentService(docRepo, amendRepo, identRepo, profRepo, auditSvc, vcSvc)
 
 	// Handler Layer
-	h := handler.NewHandlers(authSvc, identSvc, qrSvc, verifSvc, dedupSvc, auditSvc, vcSvc, profRepo, credRepo)
+	h := handler.NewHandlers(authSvc, identSvc, qrSvc, verifSvc, dedupSvc, auditSvc, vcSvc, amendSvc, profRepo, credRepo)
 
 	// Rate Limiter Setup (Hybrid: Redis with In-Memory fallback)
 	rateLimiter := middleware.NewHybridRateLimiter(cfg.RedisHost, cfg.RedisPort, cfg.RedisPassword)
@@ -175,6 +182,12 @@ func main() {
 			r.Get("/verification-requests/pending", h.ListPendingVerificationRequests)
 			r.Post("/verification-requests/{id}/respond", h.RespondVerificationRequest)
 			r.Get("/events/stream", h.EventsStream)
+
+			// Supporting Document & Identity Amendment Endpoints
+			r.Post("/identities/me/documents", h.UploadDocument)
+			r.Get("/identities/me/documents", h.ListMyDocuments)
+			r.Post("/identities/me/amendments", h.CreateAmendmentRequest)
+			r.Get("/identities/me/amendments", h.ListMyAmendments)
 		})
 
 		// Admin Privileged Endpoints
@@ -187,6 +200,10 @@ func main() {
 			r.Get("/admin/duplicates", h.AdminListDuplicates)
 			r.Post("/admin/duplicates/{id}/resolve", h.AdminResolveDuplicate)
 			r.Get("/admin/audit", h.AdminListAudit)
+
+			// Admin Identity Amendment Review Queue
+			r.Get("/admin/amendments", h.AdminListAmendments)
+			r.Post("/admin/amendments/{id}/review", h.AdminReviewAmendment)
 		})
 	})
 
