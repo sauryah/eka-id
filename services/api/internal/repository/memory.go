@@ -597,14 +597,36 @@ func (r *MemoryDuplicateRepo) ResolveFlag(ctx context.Context, id uuid.UUID, sta
 // Disk Persistence Support for Standalone Offline Operation
 // -------------------------------------------------------------
 
+type PersistedUser struct {
+	ID           uuid.UUID `json:"id"`
+	Email        string    `json:"email"`
+	Phone        string    `json:"phone,omitempty"`
+	PasswordHash string    `json:"password_hash"`
+	Role         string    `json:"role"`
+	Status       string    `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type PersistedOrganization struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	Slug       string    `json:"slug"`
+	ApiKeyHash string    `json:"api_key_hash"`
+	Status     string    `json:"status"`
+	WebhookURL string    `json:"webhook_url,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
 type PersistedState struct {
-	Users          []*domain.User          `json:"users"`
-	Identities     []*domain.Identity      `json:"identities"`
-	Profiles       []*domain.Profile       `json:"profiles"`
-	Organizations  []*domain.Organization  `json:"organizations"`
-	Credentials    []*domain.Credential    `json:"credentials"`
-	DuplicateFlags []*domain.DuplicateFlag `json:"duplicate_flags"`
-	AuditEvents    []*domain.AuditEvent    `json:"audit_events"`
+	Users          []*PersistedUser          `json:"users"`
+	Identities     []*domain.Identity        `json:"identities"`
+	Profiles       []*domain.Profile         `json:"profiles"`
+	Organizations  []*PersistedOrganization  `json:"organizations"`
+	Credentials    []*domain.Credential      `json:"credentials"`
+	DuplicateFlags []*domain.DuplicateFlag   `json:"duplicate_flags"`
+	AuditEvents    []*domain.AuditEvent      `json:"audit_events"`
 }
 
 func (m *MemoryStore) SetPersistenceFile(path string) {
@@ -628,17 +650,26 @@ func (m *MemoryStore) SaveToFile() error {
 	defer m.mu.RUnlock()
 
 	state := PersistedState{
-		Users:          make([]*domain.User, 0, len(m.Users.users)),
+		Users:          make([]*PersistedUser, 0, len(m.Users.users)),
 		Identities:     make([]*domain.Identity, 0, len(m.Identities.identities)),
 		Profiles:       make([]*domain.Profile, 0, len(m.Profiles.profiles)),
-		Organizations:  make([]*domain.Organization, 0, len(m.Organizations.orgs)),
+		Organizations:  make([]*PersistedOrganization, 0, len(m.Organizations.orgs)),
 		Credentials:    make([]*domain.Credential, 0),
 		DuplicateFlags: make([]*domain.DuplicateFlag, 0, len(m.Duplicates.flags)),
 		AuditEvents:    make([]*domain.AuditEvent, 0, len(*m.Audit.events)),
 	}
 
 	for _, u := range m.Users.users {
-		state.Users = append(state.Users, u)
+		state.Users = append(state.Users, &PersistedUser{
+			ID:           u.ID,
+			Email:        u.Email,
+			Phone:        u.Phone,
+			PasswordHash: u.PasswordHash,
+			Role:         u.Role,
+			Status:       u.Status,
+			CreatedAt:    u.CreatedAt,
+			UpdatedAt:    u.UpdatedAt,
+		})
 	}
 	for _, i := range m.Identities.identities {
 		state.Identities = append(state.Identities, i)
@@ -647,7 +678,16 @@ func (m *MemoryStore) SaveToFile() error {
 		state.Profiles = append(state.Profiles, p)
 	}
 	for _, o := range m.Organizations.orgs {
-		state.Organizations = append(state.Organizations, o)
+		state.Organizations = append(state.Organizations, &PersistedOrganization{
+			ID:         o.ID,
+			Name:       o.Name,
+			Slug:       o.Slug,
+			ApiKeyHash: o.ApiKeyHash,
+			Status:     o.Status,
+			WebhookURL: o.WebhookURL,
+			CreatedAt:  o.CreatedAt,
+			UpdatedAt:  o.UpdatedAt,
+		})
 	}
 	for _, credList := range m.Credentials.credentials {
 		state.Credentials = append(state.Credentials, credList...)
@@ -693,8 +733,18 @@ func (m *MemoryStore) LoadFromFile(path string) (bool, error) {
 	defer m.mu.Unlock()
 
 	for _, u := range state.Users {
-		m.Users.users[u.ID] = u
-		m.Users.usersByEmail[strings.ToLower(u.Email)] = u
+		domainUser := &domain.User{
+			ID:           u.ID,
+			Email:        u.Email,
+			Phone:        u.Phone,
+			PasswordHash: u.PasswordHash,
+			Role:         u.Role,
+			Status:       u.Status,
+			CreatedAt:    u.CreatedAt,
+			UpdatedAt:    u.UpdatedAt,
+		}
+		m.Users.users[u.ID] = domainUser
+		m.Users.usersByEmail[strings.ToLower(u.Email)] = domainUser
 	}
 	for _, i := range state.Identities {
 		m.Identities.identities[i.ID] = i
@@ -705,7 +755,17 @@ func (m *MemoryStore) LoadFromFile(path string) (bool, error) {
 		m.Profiles.profiles[p.IdentityID] = p
 	}
 	for _, o := range state.Organizations {
-		m.Organizations.orgs[o.ID] = o
+		domainOrg := &domain.Organization{
+			ID:         o.ID,
+			Name:       o.Name,
+			Slug:       o.Slug,
+			ApiKeyHash: o.ApiKeyHash,
+			Status:     o.Status,
+			WebhookURL: o.WebhookURL,
+			CreatedAt:  o.CreatedAt,
+			UpdatedAt:  o.UpdatedAt,
+		}
+		m.Organizations.orgs[o.ID] = domainOrg
 	}
 	for _, c := range state.Credentials {
 		m.Credentials.credentials[c.IdentityID] = append(m.Credentials.credentials[c.IdentityID], c)
