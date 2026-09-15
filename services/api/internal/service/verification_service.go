@@ -164,3 +164,7 @@ func (s *VerificationService) RespondRequest(ctx context.Context, requestID, ide
 func (s *VerificationService) ListPendingByIdentity(ctx context.Context, identityID uuid.UUID) ([]*domain.VerificationRequest, error) {
 	return s.verifRepo.ListRequestsByIdentity(ctx, identityID)
 }
+
+func (s *VerificationService) GetRequestByID(ctx context.Context, requestID uuid.UUID) (*domain.VerificationRequest, error) {
+	return s.verifRepo.GetRequestByID(ctx, requestID)
+}
