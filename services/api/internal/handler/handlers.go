@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,6 +27,7 @@ type Handlers struct {
 	dedupSvc  *service.DeduplicationService
 	auditSvc  *service.AuditService
 	vcSvc     *service.VCService
+	amendSvc  *service.AmendmentService
 	profRepo  repository.ProfileRepository
 	credRepo  repository.CredentialRepository
 }
@@ -37,6 +40,7 @@ func NewHandlers(
 	dedupSvc *service.DeduplicationService,
 	auditSvc *service.AuditService,
 	vcSvc *service.VCService,
+	amendSvc *service.AmendmentService,
 	profRepo repository.ProfileRepository,
 	credRepo repository.CredentialRepository,
 ) *Handlers {
@@ -48,6 +52,7 @@ func NewHandlers(
 		dedupSvc:  dedupSvc,
 		auditSvc:  auditSvc,
 		vcSvc:     vcSvc,
+		amendSvc:  amendSvc,
 		profRepo:  profRepo,
 		credRepo:  credRepo,
 	}
@@ -732,5 +737,195 @@ func (h *Handlers) AdminListAudit(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"events": events,
 		"total":  total,
+	})
+}
+
+// --- Document & Identity Amendment Handlers ---
+
+func (h *Handlers) UploadDocument(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.IdentityID == uuid.Nil {
+		ErrorResponse(w, http.StatusUnauthorized, "UNAUTHORIZED", "Identity credentials required", reqID)
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+	var docType, docName, mimeType string
+	var fileData []byte
+
+	if strings.Contains(contentType, "multipart/form-data") {
+		_ = r.ParseMultipartForm(10 << 20) // 10 MB max
+		file, handler, err := r.FormFile("file")
+		if err != nil {
+			ErrorResponse(w, http.StatusBadRequest, "FILE_MISSING", "Supporting document file is required", reqID)
+			return
+		}
+		defer file.Close()
+
+		docType = r.FormValue("document_type")
+		docName = handler.Filename
+		mimeType = handler.Header.Get("Content-Type")
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		fileData, err = io.ReadAll(file)
+		if err != nil {
+			ErrorResponse(w, http.StatusBadRequest, "READ_ERROR", "Failed to read uploaded file", reqID)
+			return
+		}
+	} else {
+		var body struct {
+			DocumentType string `json:"document_type"`
+			DocumentName string `json:"document_name"`
+			MimeType     string `json:"mime_type"`
+			FileContent  string `json:"file_content"` // Base64
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.FileContent == "" {
+			ErrorResponse(w, http.StatusBadRequest, "INVALID_INPUT", "Document type, name, and base64 file_content are required", reqID)
+			return
+		}
+
+		docType = body.DocumentType
+		docName = body.DocumentName
+		mimeType = body.MimeType
+		if mimeType == "" {
+			mimeType = "application/pdf"
+		}
+
+		// Handle data URL prefix if present
+		rawBase64 := body.FileContent
+		if commaIdx := strings.Index(rawBase64, ","); commaIdx != -1 {
+			rawBase64 = rawBase64[commaIdx+1:]
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(rawBase64)
+		if err != nil {
+			ErrorResponse(w, http.StatusBadRequest, "DECODE_ERROR", "Invalid base64 document content", reqID)
+			return
+		}
+		fileData = decoded
+	}
+
+	doc, err := h.amendSvc.UploadDocument(r.Context(), claims.IdentityID, docType, docName, mimeType, fileData, &claims.UserID)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "UPLOAD_FAILED", err.Error(), reqID)
+		return
+	}
+
+	JSON(w, http.StatusCreated, doc)
+}
+
+func (h *Handlers) ListMyDocuments(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.IdentityID == uuid.Nil {
+		ErrorResponse(w, http.StatusUnauthorized, "UNAUTHORIZED", "Identity credentials required", reqID)
+		return
+	}
+
+	docs, err := h.amendSvc.ListDocuments(r.Context(), claims.IdentityID)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve documents", reqID)
+		return
+	}
+
+	JSON(w, http.StatusOK, docs)
+}
+
+func (h *Handlers) CreateAmendmentRequest(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.IdentityID == uuid.Nil {
+		ErrorResponse(w, http.StatusUnauthorized, "UNAUTHORIZED", "Identity credentials required", reqID)
+		return
+	}
+
+	var body struct {
+		RequestedChanges map[string]interface{} `json:"requested_changes"`
+		Justification    string                 `json:"justification"`
+		DocumentIDs      []uuid.UUID            `json:"document_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.RequestedChanges) == 0 {
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_INPUT", "Target change attributes are required", reqID)
+		return
+	}
+
+	req, err := h.amendSvc.CreateAmendmentRequest(r.Context(), claims.IdentityID, body.RequestedChanges, body.Justification, body.DocumentIDs, &claims.UserID)
+	if err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "AMENDMENT_FAILED", err.Error(), reqID)
+		return
+	}
+
+	JSON(w, http.StatusCreated, req)
+}
+
+func (h *Handlers) ListMyAmendments(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil || claims.IdentityID == uuid.Nil {
+		ErrorResponse(w, http.StatusUnauthorized, "UNAUTHORIZED", "Identity credentials required", reqID)
+		return
+	}
+
+	list, err := h.amendSvc.ListAmendmentsByIdentity(r.Context(), claims.IdentityID)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to retrieve amendments", reqID)
+		return
+	}
+
+	JSON(w, http.StatusOK, list)
+}
+
+func (h *Handlers) AdminListAmendments(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+
+	list, total, err := h.amendSvc.ListAllAmendments(r.Context(), limit, offset)
+	if err != nil {
+		ErrorResponse(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to list amendments", reqID)
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"amendments": list,
+		"total":      total,
+	})
+}
+
+func (h *Handlers) AdminReviewAmendment(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetRequestID(r.Context())
+	claims := middleware.GetUserClaims(r.Context())
+	idStr := chi.URLParam(r, "id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_ID", "Invalid amendment UUID", reqID)
+		return
+	}
+
+	var body struct {
+		Approved        bool   `json:"approved"`
+		RejectionReason string `json:"rejection_reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "INVALID_INPUT", "Review decision required", reqID)
+		return
+	}
+
+	reviewerID := uuid.Nil
+	if claims != nil {
+		reviewerID = claims.UserID
+	}
+
+	req, err := h.amendSvc.ReviewAmendment(r.Context(), id, body.Approved, body.RejectionReason, reviewerID)
+	if err != nil {
+		ErrorResponse(w, http.StatusBadRequest, "REVIEW_FAILED", err.Error(), reqID)
+		return
+	}
+
+	JSON(w, http.StatusOK, map[string]interface{}{
+		"message":   "Amendment review processed",
+		"amendment": req,
 	})
 }
