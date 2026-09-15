@@ -21,6 +21,8 @@ type PostgresStore struct {
 	Credentials   *PostgresCredentialRepo
 	Audit         *PostgresAuditRepo
 	Duplicates    *PostgresDuplicateRepo
+	Documents     *PostgresDocumentRepo
+	Amendments    *PostgresAmendmentRepo
 }
 
 func NewPostgresStore(db *sql.DB) *PostgresStore {
@@ -35,6 +37,8 @@ func NewPostgresStore(db *sql.DB) *PostgresStore {
 		Credentials:   &PostgresCredentialRepo{db: db},
 		Audit:         &PostgresAuditRepo{db: db},
 		Duplicates:    &PostgresDuplicateRepo{db: db},
+		Documents:     &PostgresDocumentRepo{db: db},
+		Amendments:    &PostgresAmendmentRepo{db: db},
 	}
 }
 
@@ -187,6 +191,37 @@ func (s *PostgresStore) AutoMigrate(ctx context.Context) error {
 		reviewed_at TIMESTAMPTZ,
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
+
+	CREATE TABLE IF NOT EXISTS identity_documents (
+		id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+		identity_id UUID NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+		document_type VARCHAR(60) NOT NULL,
+		document_name VARCHAR(255) NOT NULL,
+		mime_type VARCHAR(100) NOT NULL,
+		file_size BIGINT NOT NULL,
+		sha256_hash VARCHAR(64) NOT NULL,
+		file_content TEXT,
+		status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_identity_documents_identity ON identity_documents(identity_id);
+
+	CREATE TABLE IF NOT EXISTS identity_amendment_requests (
+		id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+		identity_id UUID NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+		requested_changes JSONB NOT NULL,
+		current_values JSONB NOT NULL,
+		justification TEXT NOT NULL,
+		document_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+		status VARCHAR(30) NOT NULL DEFAULT 'PENDING_REVIEW',
+		reviewed_by UUID REFERENCES users(id),
+		reviewed_at TIMESTAMPTZ,
+		rejection_reason TEXT,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_identity_amendments_identity ON identity_amendment_requests(identity_id);
+	CREATE INDEX IF NOT EXISTS idx_identity_amendments_status ON identity_amendment_requests(status);
 	`
 	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
 		return err
@@ -831,4 +866,223 @@ func (r *PostgresDuplicateRepo) ResolveFlag(ctx context.Context, id uuid.UUID, s
 	query := `UPDATE duplicate_flags SET status = $1, reviewed_by = $2, reviewed_at = $3 WHERE id = $4`
 	_, err := r.db.ExecContext(ctx, query, status, reviewerID, now, id)
 	return err
+}
+
+// --- Document Repository ---
+
+type PostgresDocumentRepo struct { db *sql.DB }
+
+func (r *PostgresDocumentRepo) Create(ctx context.Context, doc *domain.IdentityDocument) error {
+	query := `
+		INSERT INTO identity_documents (id, identity_id, document_type, document_name, mime_type, file_size, sha256_hash, file_content, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`
+	_, err := r.db.ExecContext(ctx, query,
+		doc.ID, doc.IdentityID, doc.DocumentType, doc.DocumentName, doc.MimeType, doc.FileSize, doc.SHA256Hash, doc.FileContent, doc.Status, doc.CreatedAt,
+	)
+	return err
+}
+
+func (r *PostgresDocumentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.IdentityDocument, error) {
+	query := `SELECT id, identity_id, document_type, document_name, mime_type, file_size, sha256_hash, file_content, status, created_at FROM identity_documents WHERE id = $1`
+	row := r.db.QueryRowContext(ctx, query, id)
+	var doc domain.IdentityDocument
+	var content sql.NullString
+	if err := row.Scan(&doc.ID, &doc.IdentityID, &doc.DocumentType, &doc.DocumentName, &doc.MimeType, &doc.FileSize, &doc.SHA256Hash, &content, &doc.Status, &doc.CreatedAt); err != nil {
+		return nil, err
+	}
+	if content.Valid {
+		doc.FileContent = content.String
+	}
+	return &doc, nil
+}
+
+func (r *PostgresDocumentRepo) ListByIdentityID(ctx context.Context, identityID uuid.UUID) ([]*domain.IdentityDocument, error) {
+	query := `SELECT id, identity_id, document_type, document_name, mime_type, file_size, sha256_hash, status, created_at FROM identity_documents WHERE identity_id = $1 ORDER BY created_at DESC`
+	rows, err := r.db.QueryContext(ctx, query, identityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var docs []*domain.IdentityDocument
+	for rows.Next() {
+		var doc domain.IdentityDocument
+		if err := rows.Scan(&doc.ID, &doc.IdentityID, &doc.DocumentType, &doc.DocumentName, &doc.MimeType, &doc.FileSize, &doc.SHA256Hash, &doc.Status, &doc.CreatedAt); err == nil {
+			docs = append(docs, &doc)
+		}
+	}
+	return docs, nil
+}
+
+func (r *PostgresDocumentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	query := `UPDATE identity_documents SET status = $1 WHERE id = $2`
+	_, err := r.db.ExecContext(ctx, query, status, id)
+	return err
+}
+
+// --- Amendment Repository ---
+
+type PostgresAmendmentRepo struct { db *sql.DB }
+
+func (r *PostgresAmendmentRepo) Create(ctx context.Context, req *domain.AmendmentRequest) error {
+	reqChangesJSON, _ := json.Marshal(req.RequestedChanges)
+	currValuesJSON, _ := json.Marshal(req.CurrentValues)
+	docIDsJSON, _ := json.Marshal(req.DocumentIDs)
+
+	query := `
+		INSERT INTO identity_amendment_requests (id, identity_id, requested_changes, current_values, justification, document_ids, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`
+	_, err := r.db.ExecContext(ctx, query,
+		req.ID, req.IdentityID, reqChangesJSON, currValuesJSON, req.Justification, docIDsJSON, req.Status, req.CreatedAt, req.UpdatedAt,
+	)
+	return err
+}
+
+func (r *PostgresAmendmentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.AmendmentRequest, error) {
+	query := `
+		SELECT r.id, r.identity_id, i.eka_id, r.requested_changes, r.current_values, r.justification, r.document_ids, r.status, r.reviewed_by, r.reviewed_at, r.rejection_reason, r.created_at, r.updated_at
+		FROM identity_amendment_requests r
+		JOIN identities i ON r.identity_id = i.id
+		WHERE r.id = $1
+	`
+	row := r.db.QueryRowContext(ctx, query, id)
+	return r.scanAmendment(row)
+}
+
+func (r *PostgresAmendmentRepo) ListByIdentityID(ctx context.Context, identityID uuid.UUID) ([]*domain.AmendmentRequest, error) {
+	query := `
+		SELECT r.id, r.identity_id, i.eka_id, r.requested_changes, r.current_values, r.justification, r.document_ids, r.status, r.reviewed_by, r.reviewed_at, r.rejection_reason, r.created_at, r.updated_at
+		FROM identity_amendment_requests r
+		JOIN identities i ON r.identity_id = i.id
+		WHERE r.identity_id = $1
+		ORDER BY r.created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query, identityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reqs []*domain.AmendmentRequest
+	for rows.Next() {
+		if req, err := r.scanAmendmentRow(rows); err == nil {
+			reqs = append(reqs, req)
+		}
+	}
+	return reqs, nil
+}
+
+func (r *PostgresAmendmentRepo) ListPending(ctx context.Context) ([]*domain.AmendmentRequest, error) {
+	query := `
+		SELECT r.id, r.identity_id, i.eka_id, r.requested_changes, r.current_values, r.justification, r.document_ids, r.status, r.reviewed_by, r.reviewed_at, r.rejection_reason, r.created_at, r.updated_at
+		FROM identity_amendment_requests r
+		JOIN identities i ON r.identity_id = i.id
+		WHERE r.status = 'PENDING_REVIEW'
+		ORDER BY r.created_at DESC
+	`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var reqs []*domain.AmendmentRequest
+	for rows.Next() {
+		if req, err := r.scanAmendmentRow(rows); err == nil {
+			reqs = append(reqs, req)
+		}
+	}
+	return reqs, nil
+}
+
+func (r *PostgresAmendmentRepo) ListAll(ctx context.Context, limit, offset int) ([]*domain.AmendmentRequest, int, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var total int
+	_ = r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM identity_amendment_requests`).Scan(&total)
+
+	query := `
+		SELECT r.id, r.identity_id, i.eka_id, r.requested_changes, r.current_values, r.justification, r.document_ids, r.status, r.reviewed_by, r.reviewed_at, r.rejection_reason, r.created_at, r.updated_at
+		FROM identity_amendment_requests r
+		JOIN identities i ON r.identity_id = i.id
+		ORDER BY r.created_at DESC
+		LIMIT $1 OFFSET $2
+	`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var reqs []*domain.AmendmentRequest
+	for rows.Next() {
+		if req, err := r.scanAmendmentRow(rows); err == nil {
+			reqs = append(reqs, req)
+		}
+	}
+	return reqs, total, nil
+}
+
+func (r *PostgresAmendmentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, reviewerID *uuid.UUID, rejectionReason string) error {
+	now := time.Now().UTC()
+	query := `
+		UPDATE identity_amendment_requests
+		SET status = $1, reviewed_by = $2, reviewed_at = $3, rejection_reason = $4, updated_at = $5
+		WHERE id = $6
+	`
+	_, err := r.db.ExecContext(ctx, query, status, reviewerID, now, rejectionReason, now, id)
+	return err
+}
+
+func (r *PostgresAmendmentRepo) scanAmendment(row *sql.Row) (*domain.AmendmentRequest, error) {
+	var req domain.AmendmentRequest
+	var reqJSON, currJSON, docIDsJSON []byte
+	var revBy, rejReason sql.NullString
+	var revAt sql.NullTime
+
+	if err := row.Scan(&req.ID, &req.IdentityID, &req.EkaID, &reqJSON, &currJSON, &req.Justification, &docIDsJSON, &req.Status, &revBy, &revAt, &rejReason, &req.CreatedAt, &req.UpdatedAt); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(reqJSON, &req.RequestedChanges)
+	_ = json.Unmarshal(currJSON, &req.CurrentValues)
+	_ = json.Unmarshal(docIDsJSON, &req.DocumentIDs)
+	if revBy.Valid {
+		p, _ := uuid.Parse(revBy.String)
+		req.ReviewedBy = &p
+	}
+	if revAt.Valid {
+		req.ReviewedAt = &revAt.Time
+	}
+	if rejReason.Valid {
+		req.RejectionReason = rejReason.String
+	}
+	return &req, nil
+}
+
+func (r *PostgresAmendmentRepo) scanAmendmentRow(rows *sql.Rows) (*domain.AmendmentRequest, error) {
+	var req domain.AmendmentRequest
+	var reqJSON, currJSON, docIDsJSON []byte
+	var revBy, rejReason sql.NullString
+	var revAt sql.NullTime
+
+	if err := rows.Scan(&req.ID, &req.IdentityID, &req.EkaID, &reqJSON, &currJSON, &req.Justification, &docIDsJSON, &req.Status, &revBy, &revAt, &rejReason, &req.CreatedAt, &req.UpdatedAt); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(reqJSON, &req.RequestedChanges)
+	_ = json.Unmarshal(currJSON, &req.CurrentValues)
+	_ = json.Unmarshal(docIDsJSON, &req.DocumentIDs)
+	if revBy.Valid {
+		p, _ := uuid.Parse(revBy.String)
+		req.ReviewedBy = &p
+	}
+	if revAt.Valid {
+		req.ReviewedAt = &revAt.Time
+	}
+	if rejReason.Valid {
+		req.RejectionReason = rejReason.String
+	}
+	return &req, nil
 }
