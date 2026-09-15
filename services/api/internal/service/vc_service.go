@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -26,13 +27,15 @@ var (
 )
 
 type VCService struct {
-	identRepo repository.IdentityRepository
-	profRepo  repository.ProfileRepository
-	orgRepo   repository.OrganizationRepository
-	credRepo  repository.CredentialRepository
-	auditSvc  *AuditService
-	jwtSecret []byte
-	verifyURL string
+	identRepo       repository.IdentityRepository
+	profRepo        repository.ProfileRepository
+	orgRepo         repository.OrganizationRepository
+	credRepo        repository.CredentialRepository
+	auditSvc        *AuditService
+	jwtSecret       []byte
+	verifyURL       string
+	platformPubKey  ed25519.PublicKey
+	platformPrivKey ed25519.PrivateKey
 }
 
 func NewVCService(
@@ -44,14 +47,18 @@ func NewVCService(
 	jwtSecret string,
 	verifyURL string,
 ) *VCService {
+	pub, priv, _ := crypto.DeriveEd25519KeyPair([]byte(jwtSecret))
+
 	return &VCService{
-		identRepo: identRepo,
-		profRepo:  profRepo,
-		orgRepo:   orgRepo,
-		credRepo:  credRepo,
-		auditSvc:  auditSvc,
-		jwtSecret: []byte(jwtSecret),
-		verifyURL: verifyURL,
+		identRepo:       identRepo,
+		profRepo:        profRepo,
+		orgRepo:         orgRepo,
+		credRepo:        credRepo,
+		auditSvc:        auditSvc,
+		jwtSecret:       []byte(jwtSecret),
+		verifyURL:       verifyURL,
+		platformPubKey:  pub,
+		platformPrivKey: priv,
 	}
 }
 
@@ -61,23 +68,20 @@ func (s *VCService) ResolveDID(ctx context.Context, didURI string) (*vc.DIDDocum
 
 	// Case 1: Platform Root Authority DID
 	if cleanDID == "did:eka:issuer:platform" || cleanDID == "did:eka:platform" {
+		keyID := "did:eka:issuer:platform#key-1"
 		return &vc.DIDDocument{
-			Context: []string{vc.W3CDIDContextV1, vc.W3CSecurityJWS2020},
+			Context: []string{vc.W3CDIDContextV1, vc.W3CEd25519Context2020, vc.W3CSecurityJWS2020},
 			ID:      "did:eka:issuer:platform",
 			VerificationMethod: []vc.VerificationMethod{
 				{
-					ID:         "did:eka:issuer:platform#key-1",
-					Type:       "JsonWebKey2020",
-					Controller: "did:eka:issuer:platform",
-					PublicKeyJwk: map[string]interface{}{
-						"kty": "oct",
-						"use": "sig",
-						"alg": "HS256",
-					},
+					ID:           keyID,
+					Type:         vc.TypeEd25519VerificationKey,
+					Controller:   "did:eka:issuer:platform",
+					PublicKeyJwk: crypto.PublicKeyToJWK(s.platformPubKey, keyID),
 				},
 			},
-			Authentication:  []string{"did:eka:issuer:platform#key-1"},
-			AssertionMethod: []string{"did:eka:issuer:platform#key-1"},
+			Authentication:  []string{keyID},
+			AssertionMethod: []string{keyID},
 			Service: []vc.DIDService{
 				{
 					ID:              "did:eka:issuer:platform#verification-service",
@@ -96,24 +100,24 @@ func (s *VCService) ResolveDID(ctx context.Context, didURI string) (*vc.DIDDocum
 			return nil, ErrDIDNotFound
 		}
 
+		keyID := fmt.Sprintf("%s#key-1", cleanDID)
+		orgSeed := fmt.Sprintf("%s:org:%s", string(s.jwtSecret), org.Slug)
+		orgPub, _, _ := crypto.DeriveEd25519KeyPair([]byte(orgSeed))
+
 		return &vc.DIDDocument{
-			Context:     []string{vc.W3CDIDContextV1, vc.W3CSecurityJWS2020},
+			Context:     []string{vc.W3CDIDContextV1, vc.W3CEd25519Context2020, vc.W3CSecurityJWS2020},
 			ID:          cleanDID,
 			AlsoKnownAs: []string{fmt.Sprintf("https://id.eka.dev/orgs/%s", org.Slug)},
 			VerificationMethod: []vc.VerificationMethod{
 				{
-					ID:         fmt.Sprintf("%s#key-1", cleanDID),
-					Type:       "JsonWebKey2020",
-					Controller: cleanDID,
-					PublicKeyJwk: map[string]interface{}{
-						"kty": "oct",
-						"use": "sig",
-						"alg": "HS256",
-					},
+					ID:           keyID,
+					Type:         vc.TypeEd25519VerificationKey,
+					Controller:   cleanDID,
+					PublicKeyJwk: crypto.PublicKeyToJWK(orgPub, keyID),
 				},
 			},
-			Authentication:  []string{fmt.Sprintf("%s#key-1", cleanDID)},
-			AssertionMethod: []string{fmt.Sprintf("%s#key-1", cleanDID)},
+			Authentication:  []string{keyID},
+			AssertionMethod: []string{keyID},
 			Service: []vc.DIDService{
 				{
 					ID:              fmt.Sprintf("%s#org-service", cleanDID),
@@ -136,23 +140,23 @@ func (s *VCService) ResolveDID(ctx context.Context, didURI string) (*vc.DIDDocum
 			return nil, ErrDIDNotFound
 		}
 
+		keyID := fmt.Sprintf("did:eka:%s#key-1", ident.EkaID)
+		subjSeed := fmt.Sprintf("%s:subject:%s", string(s.jwtSecret), ident.EkaID)
+		subjPub, _, _ := crypto.DeriveEd25519KeyPair([]byte(subjSeed))
+
 		return &vc.DIDDocument{
-			Context: []string{vc.W3CDIDContextV1, vc.W3CSecurityJWS2020},
+			Context: []string{vc.W3CDIDContextV1, vc.W3CEd25519Context2020, vc.W3CSecurityJWS2020},
 			ID:      fmt.Sprintf("did:eka:%s", ident.EkaID),
 			VerificationMethod: []vc.VerificationMethod{
 				{
-					ID:         fmt.Sprintf("did:eka:%s#key-1", ident.EkaID),
-					Type:       "JsonWebKey2020",
-					Controller: fmt.Sprintf("did:eka:%s", ident.EkaID),
-					PublicKeyJwk: map[string]interface{}{
-						"kty": "oct",
-						"use": "sig",
-						"alg": "HS256",
-					},
+					ID:           keyID,
+					Type:         vc.TypeEd25519VerificationKey,
+					Controller:   fmt.Sprintf("did:eka:%s", ident.EkaID),
+					PublicKeyJwk: crypto.PublicKeyToJWK(subjPub, keyID),
 				},
 			},
-			Authentication:  []string{fmt.Sprintf("did:eka:%s#key-1", ident.EkaID)},
-			AssertionMethod: []string{fmt.Sprintf("did:eka:%s#key-1", ident.EkaID)},
+			Authentication:  []string{keyID},
+			AssertionMethod: []string{keyID},
 			Service: []vc.DIDService{
 				{
 					ID:              fmt.Sprintf("did:eka:%s#verification", ident.EkaID),
@@ -198,6 +202,7 @@ func (s *VCService) MintVerifiableCredential(ctx context.Context, cred *domain.C
 	verifiableCred := &vc.VerifiableCredential{
 		Context: []string{
 			vc.W3CCredentialsContextV1,
+			vc.W3CEd25519Context2020,
 			vc.EkaIDContextV1,
 		},
 		ID:   fmt.Sprintf("urn:uuid:%s", cred.ID.String()),
@@ -234,6 +239,7 @@ func (s *VCService) MintVerifiablePresentation(ctx context.Context, ekaID string
 	attestationVC := vc.VerifiableCredential{
 		Context: []string{
 			vc.W3CCredentialsContextV1,
+			vc.W3CEd25519Context2020,
 			vc.EkaIDContextV1,
 		},
 		ID:   fmt.Sprintf("urn:uuid:%s", credID),
@@ -262,6 +268,7 @@ func (s *VCService) MintVerifiablePresentation(ctx context.Context, ekaID string
 	pres := &vc.VerifiablePresentation{
 		Context: []string{
 			vc.W3CCredentialsContextV1,
+			vc.W3CEd25519Context2020,
 			vc.EkaIDContextV1,
 		},
 		ID:                   fmt.Sprintf("urn:uuid:%s", uuid.New().String()),
@@ -290,27 +297,31 @@ func (s *VCService) VerifyW3CCredential(ctx context.Context, cred *vc.Verifiable
 		return false, "Credential expired", ErrW3CCredentialExpired
 	}
 
-	// 2. Proof integrity check
-	expectedProofValue, err := s.computeProofSignature(cred, cred.Proof.Created)
-	if err != nil {
-		return false, "Failed to compute proof", err
+	// 2. Compute canonical payload
+	payloadBytes := s.computeCanonicalPayload(cred, cred.Proof.Created)
+
+	// 3. Try Ed25519 Asymmetric Verification first
+	if crypto.VerifyEd25519(s.platformPubKey, payloadBytes, cred.Proof.ProofValue) {
+		return true, "VALID", nil
 	}
 
-	if !hmac.Equal([]byte(cred.Proof.ProofValue), []byte(expectedProofValue)) {
-		return false, "Cryptographic proof mismatch", ErrInvalidW3CProof
+	// 4. Fallback to HMAC verification for legacy credentials
+	mac := hmac.New(sha256.New, s.jwtSecret)
+	mac.Write(payloadBytes)
+	legacyExpected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if hmac.Equal([]byte(cred.Proof.ProofValue), []byte(legacyExpected)) {
+		return true, "VALID", nil
 	}
 
-	return true, "VALID", nil
+	return false, "Cryptographic proof mismatch", ErrInvalidW3CProof
 }
 
 func (s *VCService) generateProof(target interface{}, issuerDID string, timestamp time.Time) (*vc.Proof, error) {
-	proofVal, err := s.computeProofSignature(target, timestamp)
-	if err != nil {
-		return nil, err
-	}
+	payloadBytes := s.computeCanonicalPayload(target, timestamp)
+	proofVal := crypto.SignEd25519(s.platformPrivKey, payloadBytes)
 
 	return &vc.Proof{
-		Type:               "EkaSignature2026",
+		Type:               vc.TypeEd25519Signature2020,
 		Created:            timestamp,
 		VerificationMethod: fmt.Sprintf("%s#key-1", issuerDID),
 		ProofPurpose:       "assertionMethod",
@@ -318,8 +329,7 @@ func (s *VCService) generateProof(target interface{}, issuerDID string, timestam
 	}, nil
 }
 
-func (s *VCService) computeProofSignature(target interface{}, timestamp time.Time) (string, error) {
-	// Create normalized hash of the credential payload (excluding Proof)
+func (s *VCService) computeCanonicalPayload(target interface{}, timestamp time.Time) []byte {
 	var rawData []byte
 	switch v := target.(type) {
 	case *vc.VerifiableCredential:
@@ -338,10 +348,8 @@ func (s *VCService) computeProofSignature(target interface{}, timestamp time.Tim
 		rawData, _ = json.Marshal(target)
 	}
 
-	mac := hmac.New(sha256.New, s.jwtSecret)
-	mac.Write(rawData)
-	mac.Write([]byte(timestamp.Format(time.RFC3339Nano)))
-	sig := mac.Sum(nil)
-
-	return base64.RawURLEncoding.EncodeToString(sig), nil
+	var combined []byte
+	combined = append(combined, rawData...)
+	combined = append(combined, []byte(timestamp.Format(time.RFC3339Nano))...)
+	return combined
 }
