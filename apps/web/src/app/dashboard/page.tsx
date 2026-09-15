@@ -873,7 +873,7 @@ export default function DashboardPage() {
                         </thead>
                         <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
                           {Object.entries(amend.requested_changes || {}).map(([key, newVal]) => {
-                            const prevVal = amend.snapshot_prev_values?.[key] ?? '(none)';
+                            const prevVal = amend.current_values?.[key] ?? amend.snapshot_prev_values?.[key] ?? '(none)';
                             return (
                               <tr key={key} className="hover:bg-slate-50/60">
                                 <td className="py-2 px-3 font-semibold text-slate-800 capitalize font-sans">
