@@ -4,10 +4,11 @@ import React, { useEffect, useState } from 'react';
 import {
   Shield, QrCode, CheckCircle2, Award, Clock, Eye, Sliders,
   Check, X, AlertCircle, Lock, Download, Printer, UserCheck, RefreshCw, Key,
-  FileCode, ExternalLink, Copy
+  FileCode, ExternalLink, Copy, Radio, Zap
 } from 'lucide-react';
 import DigitalEkaCard from '@/components/DigitalEkaCard';
 import {
+  API_BASE,
   getMyIdentity, generateQRToken, getPendingVerificationRequests,
   respondVerificationRequest, getCredentialW3C, getDIDDocument,
   Identity, Profile, Credential, VerificationRequest, W3CVerifiableCredential, DIDDocument
@@ -21,6 +22,10 @@ export default function DashboardPage() {
   const [credentials, setCredentials] = useState<Credential[]>([]);
   const [requests, setRequests] = useState<VerificationRequest[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // Real-Time SSE Stream State
+  const [sseConnected, setSseConnected] = useState(false);
+  const [liveEventMessage, setLiveEventMessage] = useState<string | null>(null);
 
   // Dynamic QR Studio State
   const [qrDuration, setQrDuration] = useState<number>(15);
@@ -40,6 +45,46 @@ export default function DashboardPage() {
 
   useEffect(() => {
     loadDashboardData();
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('eka_token') : null;
+    if (!token) return;
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(`${API_BASE}/api/v1/events/stream?token=${encodeURIComponent(token)}`);
+
+      eventSource.onopen = () => {
+        setSseConnected(true);
+      };
+
+      eventSource.addEventListener('CONNECTED', () => {
+        setSseConnected(true);
+      });
+
+      eventSource.addEventListener('CONSENT_REQUEST_CREATED', async (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          const org = data.payload?.org_name || 'An organization';
+          setLiveEventMessage(`🔔 Real-Time Alert: ${org} has sent an identity verification request!`);
+          const updated = await getPendingVerificationRequests(token);
+          setRequests(updated || []);
+        } catch (err) {
+          console.error('SSE message parse error:', err);
+        }
+      });
+
+      eventSource.onerror = () => {
+        setSseConnected(false);
+      };
+    } catch (err) {
+      console.warn('SSE subscription failed:', err);
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
   }, []);
 
   const loadDashboardData = async () => {
@@ -216,6 +261,12 @@ export default function DashboardPage() {
                   <CheckCircle2 className="w-3 h-3" />
                   <span>{identity?.status}</span>
                 </span>
+                {sseConnected && (
+                  <span className="flex items-center space-x-1 px-2 py-0.5 bg-teal-500/20 border border-teal-400/40 text-teal-300 rounded-full text-[11px] font-semibold">
+                    <Radio className="w-3 h-3 text-emerald-400 animate-pulse" />
+                    <span>Live SSE Stream</span>
+                  </span>
+                )}
               </div>
               <p className="text-slate-300 text-xs mt-0.5">{profile?.email} • {profile?.phone}</p>
               <div className="mt-1.5 flex items-center space-x-2">
@@ -250,6 +301,24 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {liveEventMessage && (
+        <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-sm flex items-center justify-between shadow-sm animate-bounce-once">
+          <div className="flex items-center space-x-2">
+            <Zap className="w-5 h-5 text-amber-600 flex-shrink-0 animate-pulse" />
+            <span className="font-semibold">{liveEventMessage}</span>
+          </div>
+          <button
+            onClick={() => {
+              setLiveEventMessage(null);
+              setActiveTab('requests');
+            }}
+            className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition"
+          >
+            Review Now
+          </button>
+        </div>
+      )}
 
       {actionSuccess && (
         <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm flex items-center space-x-2">
