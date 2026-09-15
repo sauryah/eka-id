@@ -90,9 +90,11 @@ export interface AmendmentRequest {
   identity_id: string;
   eka_id?: string;
   requested_changes: Record<string, any>;
-  current_values: Record<string, any>;
+  current_values?: Record<string, any>;
+  snapshot_prev_values?: Record<string, any>;
   justification: string;
   document_ids: string[];
+  documents?: IdentityDocument[];
   status: string;
   reviewed_by?: string;
   reviewed_at?: string;
