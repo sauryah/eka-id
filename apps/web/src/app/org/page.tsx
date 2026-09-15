@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Building2, Send, CheckCircle2, AlertCircle, Shield, Key, Search, FileText } from 'lucide-react';
-import { createVerificationRequest } from '@/lib/api';
+import React, { useState, useEffect } from 'react';
+import { Building2, Send, CheckCircle2, AlertCircle, Shield, Key, Search, FileText, Radio, Zap, Clock, UserCheck, XCircle } from 'lucide-react';
+import { API_BASE, createVerificationRequest, loginUser } from '@/lib/api';
 
 export default function OrgPage() {
   const [ekaId, setEkaId] = useState('EKA-7K4M-92PX');
@@ -10,6 +10,7 @@ export default function OrgPage() {
   const [scopes, setScopes] = useState<string[]>(['identity_valid', 'name_match', 'phone']);
   const [loading, setLoading] = useState(false);
   const [submittedRequest, setSubmittedRequest] = useState<any | null>(null);
+  const [liveResponse, setLiveResponse] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const toggleScope = (scope: string) => {
@@ -20,14 +21,64 @@ export default function OrgPage() {
     }
   };
 
+  // Real-Time SSE Listener for Request Consent Response
+  useEffect(() => {
+    if (!submittedRequest?.id) return;
+
+    const token = typeof window !== 'undefined' ? localStorage.getItem('eka_token') : null;
+    if (!token) return;
+
+    let eventSource: EventSource | null = null;
+    try {
+      const sseUrl = `${API_BASE}/api/v1/events/stream?token=${encodeURIComponent(token)}&topic=${encodeURIComponent(submittedRequest.id)}`;
+      eventSource = new EventSource(sseUrl);
+
+      eventSource.addEventListener('CONSENT_REQUEST_RESPONDED', (e: MessageEvent) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.payload?.request_id === submittedRequest.id || !data.payload?.request_id) {
+            setLiveResponse(data.payload);
+          }
+        } catch (err) {
+          console.error('Failed to parse SSE payload:', err);
+        }
+      });
+    } catch (err) {
+      console.warn('SSE stream error:', err);
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [submittedRequest]);
+
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSubmittedRequest(null);
+    setLiveResponse(null);
     setLoading(true);
 
     try {
-      const token = localStorage.getItem('eka_token') || 'dev_org_token';
+      let token = localStorage.getItem('eka_token');
+      if (!token) {
+        // Auto-authenticate as Acme recruiter for seamless testing
+        try {
+          const auth = await loginUser('sarah.recruiter@acme.example.com', 'Password123!');
+          token = auth.token;
+          localStorage.setItem('eka_token', auth.token);
+          localStorage.setItem('eka_user', JSON.stringify(auth.user));
+        } catch (authErr) {
+          // Fallback to standard admin/user credentials
+          const auth = await loginUser('admin@eka.dev', 'Password123!');
+          token = auth.token;
+          localStorage.setItem('eka_token', auth.token);
+          localStorage.setItem('eka_user', JSON.stringify(auth.user));
+        }
+      }
+
       const payload = {
         eka_id: ekaId.trim(),
         purpose: purpose.trim(),
@@ -35,7 +86,7 @@ export default function OrgPage() {
         duration_days: 7,
       };
 
-      const res = await createVerificationRequest(token, payload);
+      const res = await createVerificationRequest(token || '', payload);
       setSubmittedRequest(res);
     } catch (err: any) {
       setError(err.message || 'Failed to submit verification request.');
@@ -156,17 +207,64 @@ export default function OrgPage() {
           </form>
 
           {/* Submission Result */}
-          {submittedRequest && (
-            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs space-y-2">
-              <div className="flex items-center space-x-2 text-emerald-800 font-bold text-sm">
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Verification Request Registered!</span>
+          {submittedRequest && !liveResponse && (
+            <div className="p-5 rounded-xl bg-amber-50 border border-amber-300 text-xs space-y-3 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-amber-900 font-bold text-sm">
+                  <Clock className="w-4 h-4 text-amber-700 animate-spin" />
+                  <span>Verification Request Dispatched & Awaiting Consent</span>
+                </div>
+                <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px] font-bold">
+                  <Radio className="w-3 h-3 text-amber-800 animate-pulse" />
+                  <span>Real-Time SSE Loop Active</span>
+                </span>
               </div>
-              <p className="text-emerald-700">Request ID: <code className="font-mono">{submittedRequest.id}</code></p>
-              <p className="text-emerald-700">Status: <strong>PENDING IDENTITY OWNER CONSENT</strong></p>
-              <p className="text-slate-600 mt-2">
-                Tip: If you are testing as John Mathew, switch to your <strong>Dashboard &gt; Consent Requests</strong> tab to approve this request.
+              <div className="p-3 bg-white rounded-lg border border-amber-200 font-mono text-[11px] space-y-1">
+                <p><span className="text-slate-500">Request UUID:</span> <strong className="text-slate-900">{submittedRequest.id}</strong></p>
+                <p><span className="text-slate-500">Target Identity:</span> <strong className="text-slate-900">{submittedRequest.eka_id}</strong></p>
+                <p><span className="text-slate-500">Status:</span> <span className="text-amber-700 font-bold uppercase">PENDING USER CONSENT</span></p>
+              </div>
+              <p className="text-amber-800">
+                💡 <strong>Live Test Loop:</strong> Open the user dashboard in another tab (or approve in John Mathew's dashboard). The consent event will stream directly here in real-time!
               </p>
+            </div>
+          )}
+
+          {/* Live Consent Response Streamed via SSE */}
+          {liveResponse && (
+            <div className={`p-5 rounded-xl border text-xs space-y-3 shadow-md ${liveResponse.approved ? 'bg-emerald-50 border-emerald-300' : 'bg-rose-50 border-rose-300'}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 font-bold text-sm">
+                  {liveResponse.approved ? (
+                    <>
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                      <span className="text-emerald-900">LIVE CONSENT GRANTED: Verified Claims Disclosed</span>
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-5 h-5 text-rose-600" />
+                      <span className="text-rose-900">CONSENT REJECTED: Request Denied by Identity Holder</span>
+                    </>
+                  )}
+                </div>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${liveResponse.approved ? 'bg-emerald-200 text-emerald-900' : 'bg-rose-200 text-rose-900'}`}>
+                  Instant SSE Event Received
+                </span>
+              </div>
+
+              {liveResponse.approved && liveResponse.result?.disclosed_claims && (
+                <div className="p-4 bg-white rounded-xl border border-emerald-200 space-y-3 shadow-inner">
+                  <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Authorized Zero-Knowledge Claims</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    {Object.entries(liveResponse.result.disclosed_claims).map(([k, v]) => (
+                      <div key={k} className="p-2 bg-slate-50 rounded border border-slate-200">
+                        <span className="text-[10px] text-slate-500 uppercase font-semibold block">{k.replace(/_/g, ' ')}</span>
+                        <span className="font-bold text-slate-900 font-mono">{String(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
