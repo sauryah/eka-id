@@ -27,6 +27,8 @@ type MemoryStore struct {
 	Credentials   *MemoryCredentialRepo
 	Audit         *MemoryAuditRepo
 	Duplicates    *MemoryDuplicateRepo
+	Documents     *MemoryDocumentRepo
+	Amendments    *MemoryAmendmentRepo
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -44,6 +46,8 @@ func NewMemoryStore() *MemoryStore {
 	credsMap := make(map[uuid.UUID][]*domain.Credential)
 	auditList := make([]*domain.AuditEvent, 0)
 	dupFlags := make(map[uuid.UUID]*domain.DuplicateFlag)
+	docsMap := make(map[uuid.UUID]*domain.IdentityDocument)
+	amendsMap := make(map[uuid.UUID]*domain.AmendmentRequest)
 
 	return &MemoryStore{
 		mu: sharedMu,
@@ -86,6 +90,14 @@ func NewMemoryStore() *MemoryStore {
 		Duplicates: &MemoryDuplicateRepo{
 			mu:    sharedMu,
 			flags: dupFlags,
+		},
+		Documents: &MemoryDocumentRepo{
+			mu:        sharedMu,
+			documents: docsMap,
+		},
+		Amendments: &MemoryAmendmentRepo{
+			mu:         sharedMu,
+			amendments: amendsMap,
 		},
 	}
 }
@@ -776,4 +788,131 @@ func (m *MemoryStore) LoadFromFile(path string) (bool, error) {
 	*m.Audit.events = append(*m.Audit.events, state.AuditEvents...)
 
 	return true, nil
+}
+
+// Document Repo
+type MemoryDocumentRepo struct {
+	mu        *sync.RWMutex
+	documents map[uuid.UUID]*domain.IdentityDocument
+}
+
+func (r *MemoryDocumentRepo) Create(ctx context.Context, doc *domain.IdentityDocument) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.documents[doc.ID] = doc
+	return nil
+}
+
+func (r *MemoryDocumentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.IdentityDocument, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	doc, ok := r.documents[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return doc, nil
+}
+
+func (r *MemoryDocumentRepo) ListByIdentityID(ctx context.Context, identityID uuid.UUID) ([]*domain.IdentityDocument, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var list []*domain.IdentityDocument
+	for _, doc := range r.documents {
+		if doc.IdentityID == identityID {
+			list = append(list, doc)
+		}
+	}
+	return list, nil
+}
+
+func (r *MemoryDocumentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	doc, ok := r.documents[id]
+	if !ok {
+		return ErrNotFound
+	}
+	doc.Status = status
+	return nil
+}
+
+// Amendment Repo
+type MemoryAmendmentRepo struct {
+	mu         *sync.RWMutex
+	amendments map[uuid.UUID]*domain.AmendmentRequest
+}
+
+func (r *MemoryAmendmentRepo) Create(ctx context.Context, req *domain.AmendmentRequest) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.amendments[req.ID] = req
+	return nil
+}
+
+func (r *MemoryAmendmentRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.AmendmentRequest, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	req, ok := r.amendments[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return req, nil
+}
+
+func (r *MemoryAmendmentRepo) ListByIdentityID(ctx context.Context, identityID uuid.UUID) ([]*domain.AmendmentRequest, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var list []*domain.AmendmentRequest
+	for _, req := range r.amendments {
+		if req.IdentityID == identityID {
+			list = append(list, req)
+		}
+	}
+	return list, nil
+}
+
+func (r *MemoryAmendmentRepo) ListPending(ctx context.Context) ([]*domain.AmendmentRequest, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var list []*domain.AmendmentRequest
+	for _, req := range r.amendments {
+		if req.Status == domain.AmendmentStatusPending {
+			list = append(list, req)
+		}
+	}
+	return list, nil
+}
+
+func (r *MemoryAmendmentRepo) ListAll(ctx context.Context, limit, offset int) ([]*domain.AmendmentRequest, int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var all []*domain.AmendmentRequest
+	for _, req := range r.amendments {
+		all = append(all, req)
+	}
+	total := len(all)
+	if offset > total {
+		return []*domain.AmendmentRequest{}, total, nil
+	}
+	end := offset + limit
+	if end > total || limit <= 0 {
+		end = total
+	}
+	return all[offset:end], total, nil
+}
+
+func (r *MemoryAmendmentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string, reviewerID *uuid.UUID, rejectionReason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	req, ok := r.amendments[id]
+	if !ok {
+		return ErrNotFound
+	}
+	now := time.Now().UTC()
+	req.Status = status
+	req.ReviewedBy = reviewerID
+	req.ReviewedAt = &now
+	req.RejectionReason = rejectionReason
+	req.UpdatedAt = now
+	return nil
 }
