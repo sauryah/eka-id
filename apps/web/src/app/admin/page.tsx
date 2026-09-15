@@ -162,7 +162,7 @@ export default function AdminPage() {
         hasSuccess = true;
       }
       if (amendRes.status === 'fulfilled') {
-        setAmendments(amendRes.value || []);
+        setAmendments(amendRes.value.amendments || []);
         hasSuccess = true;
       }
 
