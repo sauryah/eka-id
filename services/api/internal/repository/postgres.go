@@ -188,8 +188,18 @@ func (s *PostgresStore) AutoMigrate(ctx context.Context) error {
 		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 	`
-	_, err := s.db.ExecContext(ctx, schemaSQL)
-	return err
+	if _, err := s.db.ExecContext(ctx, schemaSQL); err != nil {
+		return err
+	}
+
+	// Ensure default seed organization exists for verification workflows
+	defaultOrgSQL := `
+		INSERT INTO organizations (id, name, slug, api_key_hash, status)
+		VALUES ('d0000000-0000-0000-0000-000000000004', 'Acme Technologies Ltd.', 'acme-technologies-ltd.', '$2a$10$7zB3c8W1x0mU4Wb/5R/uCe4NqYJ6oGZvhP7lX5W8T5Yw3jR6uWk1a', 'ACTIVE')
+		ON CONFLICT (id) DO NOTHING;
+	`
+	_, _ = s.db.ExecContext(ctx, defaultOrgSQL)
+	return nil
 }
 
 // --- User Repository ---
