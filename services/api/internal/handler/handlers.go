@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sauryah/eka-id/services/api/internal/events"
 	"github.com/sauryah/eka-id/services/api/internal/middleware"
 	"github.com/sauryah/eka-id/services/api/internal/repository"
 	"github.com/sauryah/eka-id/services/api/internal/service"
@@ -312,9 +313,9 @@ func (h *Handlers) CreateVerificationRequest(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// For dev mock: if orgID is nil, generate one
+	// If OrgID is not specified, default to seeded Acme Org UUID
 	if input.OrgID == uuid.Nil {
-		input.OrgID = uuid.New()
+		input.OrgID = uuid.MustParse("d0000000-0000-0000-0000-000000000004")
 	}
 
 	var actorID *uuid.UUID
@@ -326,6 +327,38 @@ func (h *Handlers) CreateVerificationRequest(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		ErrorResponse(w, http.StatusBadRequest, "REQUEST_CREATION_FAILED", err.Error(), reqID)
 		return
+	}
+
+	// Publish live event to target user topics
+	events.GetBroker().Publish(input.EkaID, events.Event{
+		Type:     events.EventConsentRequested,
+		TargetID: input.EkaID,
+		Payload: map[string]interface{}{
+			"request_id":       req.ID,
+			"eka_id":           req.EkaID,
+			"org_id":           req.OrgID,
+			"org_name":         req.OrgName,
+			"requested_scopes": req.RequestedScopes,
+			"purpose":          req.Purpose,
+			"created_at":       req.CreatedAt,
+		},
+		Timestamp: time.Now().UTC(),
+	})
+	if req.IdentityID != uuid.Nil {
+		events.GetBroker().Publish(req.IdentityID.String(), events.Event{
+			Type:     events.EventConsentRequested,
+			TargetID: req.IdentityID.String(),
+			Payload: map[string]interface{}{
+				"request_id":       req.ID,
+				"eka_id":           req.EkaID,
+				"org_id":           req.OrgID,
+				"org_name":         req.OrgName,
+				"requested_scopes": req.RequestedScopes,
+				"purpose":          req.Purpose,
+				"created_at":       req.CreatedAt,
+			},
+			Timestamp: time.Now().UTC(),
+		})
 	}
 
 	JSON(w, http.StatusCreated, req)
@@ -374,11 +407,136 @@ func (h *Handlers) RespondVerificationRequest(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Publish live response event to org / requester
+	events.GetBroker().Publish(reqUUID.String(), events.Event{
+		Type:     events.EventConsentResponded,
+		TargetID: reqUUID.String(),
+		Payload: map[string]interface{}{
+			"request_id":  reqUUID,
+			"approved":    body.Approved,
+			"identity_id": claims.IdentityID,
+			"result":      result,
+		},
+		Timestamp: time.Now().UTC(),
+	})
+	if reqObj, err := h.verifSvc.GetRequestByID(r.Context(), reqUUID); err == nil && reqObj != nil {
+		events.GetBroker().Publish(reqObj.OrgID.String(), events.Event{
+			Type:     events.EventConsentResponded,
+			TargetID: reqObj.OrgID.String(),
+			Payload: map[string]interface{}{
+				"request_id":  reqUUID,
+				"org_id":      reqObj.OrgID,
+				"approved":    body.Approved,
+				"identity_id": claims.IdentityID,
+				"result":      result,
+			},
+			Timestamp: time.Now().UTC(),
+		})
+	}
+
 	JSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "PROCESSED",
 		"result":   result,
 		"approved": body.Approved,
 	})
+}
+
+// --- Real-time Server-Sent Events (SSE) Stream ---
+
+func (h *Handlers) EventsStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	claims := middleware.GetUserClaims(r.Context())
+	if claims == nil {
+		ErrorResponse(w, http.StatusUnauthorized, "UNAUTHORIZED", "Valid authentication token required", "")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	broker := events.GetBroker()
+
+	topics := []string{claims.UserID.String()}
+	if claims.IdentityID != uuid.Nil {
+		topics = append(topics, claims.IdentityID.String())
+	}
+	if customTopic := r.URL.Query().Get("topic"); customTopic != "" {
+		topics = append(topics, customTopic)
+	}
+
+	if claims.IdentityID != uuid.Nil {
+		if ident, err := h.identSvc.GetByID(r.Context(), claims.IdentityID); err == nil && ident != nil {
+			topics = append(topics, ident.EkaID)
+		}
+	}
+
+	combinedChan := make(chan events.Event, 32)
+	var unsubList []struct {
+		topic string
+		ch    chan events.Event
+	}
+
+	for _, topic := range topics {
+		ch := broker.Subscribe(topic)
+		unsubList = append(unsubList, struct {
+			topic string
+			ch    chan events.Event
+		}{topic: topic, ch: ch})
+
+		go func(c chan events.Event) {
+			for ev := range c {
+				select {
+				case combinedChan <- ev:
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}(ch)
+	}
+
+	defer func() {
+		for _, u := range unsubList {
+			broker.Unsubscribe(u.topic, u.ch)
+		}
+	}()
+
+	initMsg := events.Event{
+		Type:      "CONNECTED",
+		TargetID:  claims.UserID.String(),
+		Payload:   map[string]interface{}{"status": "active", "topics": topics},
+		Timestamp: time.Now().UTC(),
+	}
+	_, _ = w.Write(initMsg.ToSSE())
+	flusher.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			_, err := w.Write([]byte(": heartbeat\n\n"))
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+		case ev := <-combinedChan:
+			_, err := w.Write(ev.ToSSE())
+			if err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 // --- W3C Verifiable Credentials & DID Handlers ---
