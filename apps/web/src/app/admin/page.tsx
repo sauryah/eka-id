@@ -3,23 +3,29 @@
 import React, { useEffect, useState } from 'react';
 import {
   ShieldAlert, Users, Search, AlertTriangle, FileText, CheckCircle2,
-  XCircle, RefreshCw, Lock, Shield, UserX, Database, Server
+  XCircle, RefreshCw, Lock, Shield, UserX, Database, Server, FileCheck, Check, X
 } from 'lucide-react';
 import {
   adminListIdentities, adminUpdateStatus, adminListDuplicates,
-  adminResolveDuplicate, adminListAudit, loginUser, Identity, AuditEvent
+  adminResolveDuplicate, adminListAudit, adminListAmendments, adminReviewAmendment,
+  loginUser, Identity, AuditEvent, AmendmentRequest
 } from '@/lib/api';
 
 export default function AdminPage() {
-  const [activeTab, setActiveTab] = useState<'identities' | 'duplicates' | 'audit'>('identities');
+  const [activeTab, setActiveTab] = useState<'identities' | 'duplicates' | 'amendments' | 'audit'>('identities');
   const [loading, setLoading] = useState(true);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [duplicates, setDuplicates] = useState<any[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [amendments, setAmendments] = useState<AmendmentRequest[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsAdminAuth, setNeedsAdminAuth] = useState(false);
+
+  // Reject Modal State
+  const [rejectingAmendId, setRejectingAmendId] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
 
   // Database Settings Modal State
   const [showDbModal, setShowDbModal] = useState(false);
@@ -135,10 +141,11 @@ export default function AdminPage() {
     setError(null);
     setNeedsAdminAuth(false);
     try {
-      const [idRes, dupRes, audRes] = await Promise.allSettled([
+      const [idRes, dupRes, audRes, amendRes] = await Promise.allSettled([
         adminListIdentities(token),
         adminListDuplicates(token),
         adminListAudit(token),
+        adminListAmendments(token),
       ]);
 
       let hasSuccess = false;
@@ -152,6 +159,10 @@ export default function AdminPage() {
       }
       if (audRes.status === 'fulfilled') {
         setAuditEvents(audRes.value.events || []);
+        hasSuccess = true;
+      }
+      if (amendRes.status === 'fulfilled') {
+        setAmendments(amendRes.value || []);
         hasSuccess = true;
       }
 
@@ -202,6 +213,20 @@ export default function AdminPage() {
       setTimeout(() => setActionSuccess(null), 4000);
     } catch (err: any) {
       setError(err.message || 'Failed to suspend duplicate identity');
+    }
+  };
+
+  const handleReviewAmendment = async (amendmentId: string, approved: boolean, reason?: string) => {
+    const token = localStorage.getItem('eka_token') || '';
+    try {
+      await adminReviewAmendment(token, amendmentId, approved, reason);
+      setActionSuccess(approved ? 'Amendment APPROVED: Profile updated & credential re-minted.' : 'Amendment REJECTED.');
+      setRejectingAmendId(null);
+      setRejectionReason('');
+      await loadAdminData();
+      setTimeout(() => setActionSuccess(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to review amendment');
     }
   };
 
@@ -273,10 +298,16 @@ export default function AdminPage() {
       )}
 
       {/* Metrics Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-8">
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
           <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Total Identities</p>
           <p className="text-2xl font-extrabold text-slate-900 mt-1">{identities.length}</p>
+        </div>
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Pending Amendments</p>
+          <p className="text-2xl font-extrabold text-teal-700 mt-1">
+            {amendments.filter((a) => a.status === 'PENDING').length}
+          </p>
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
           <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Duplicate Suspects</p>
@@ -284,14 +315,19 @@ export default function AdminPage() {
         </div>
         <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
           <p className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Audit Log Records</p>
-          <p className="text-2xl font-extrabold text-teal-700 mt-1">{auditEvents.length}</p>
+          <p className="text-2xl font-extrabold text-slate-700 mt-1">{auditEvents.length}</p>
         </div>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex space-x-2 border-b border-slate-200 pb-2 mb-6">
+      <div className="flex space-x-2 border-b border-slate-200 pb-2 mb-6 overflow-x-auto">
         {[
           { id: 'identities', label: `Identities (${identities.length})`, icon: Users },
+          {
+            id: 'amendments',
+            label: `Identity Amendments (${amendments.filter((a) => a.status === 'PENDING').length} Pending)`,
+            icon: FileCheck,
+          },
           { id: 'duplicates', label: `Duplicate Queue (${duplicates.length})`, icon: AlertTriangle },
           { id: 'audit', label: `Audit Log (${auditEvents.length})`, icon: FileText },
         ].map((tab) => {
@@ -301,7 +337,7 @@ export default function AdminPage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg text-xs font-semibold whitespace-nowrap transition ${
                 isActive
                   ? 'bg-slate-900 text-white shadow-sm'
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
@@ -384,7 +420,189 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* TAB 2: Duplicate Queue */}
+      {/* TAB 2: Identity Amendments Queue */}
+      {activeTab === 'amendments' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-slate-900 text-base flex items-center space-x-2">
+                <FileCheck className="w-5 h-5 text-teal-700" />
+                <span>Identity Amendment Verification Queue</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Audit citizen-requested profile amendments, verify cryptographic SHA-256 KYC hashes, and approve updates with 1-click.
+              </p>
+            </div>
+            <span className="px-3 py-1 bg-teal-50 border border-teal-200 text-teal-800 rounded-full text-xs font-bold">
+              {amendments.filter((a) => a.status === 'PENDING').length} Pending Action
+            </span>
+          </div>
+
+          {amendments.length === 0 ? (
+            <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center text-slate-400 text-sm">
+              <CheckCircle2 className="w-8 h-8 text-emerald-500 mx-auto mb-2" />
+              No identity amendment requests submitted yet.
+            </div>
+          ) : (
+            <div className="space-y-5">
+              {amendments.map((amend) => (
+                <div
+                  key={amend.id}
+                  className={`bg-white p-6 rounded-2xl border shadow-sm space-y-5 transition ${
+                    amend.status === 'PENDING'
+                      ? 'border-amber-200 ring-1 ring-amber-100'
+                      : amend.status === 'APPROVED'
+                      ? 'border-emerald-200'
+                      : 'border-slate-200 opacity-80'
+                  }`}
+                >
+                  {/* Request Header */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                    <div className="flex items-center space-x-3">
+                      <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-lg">
+                        did:eka:{amend.eka_id}
+                      </span>
+                      <span className="font-mono text-xs text-slate-500">REQ-{amend.id.slice(0, 8)}</span>
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider ${
+                          amend.status === 'APPROVED'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : amend.status === 'REJECTED'
+                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                            : 'bg-amber-100 text-amber-800 border border-amber-300 animate-pulse'
+                        }`}
+                      >
+                        {amend.status}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      Submitted: {new Date(amend.created_at).toLocaleString()}
+                    </span>
+                  </div>
+
+                  {/* Citizen Justification */}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs text-slate-700">
+                    <span className="font-bold text-slate-900">Citizen Justification: </span>
+                    <span>{amend.justification}</span>
+                  </div>
+
+                  {/* Side-by-Side Diff Table */}
+                  <div>
+                    <span className="text-xs font-bold text-slate-800 mb-2 block">Requested Attribute Mutations:</span>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-100 text-slate-600 font-semibold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-4">Profile Field</th>
+                            <th className="py-2.5 px-4">Current Snapshot Value</th>
+                            <th className="py-2.5 px-4">Requested New Value</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                          {Object.entries(amend.requested_changes || {}).map(([key, newVal]) => {
+                            const prevVal = amend.snapshot_prev_values?.[key] ?? '(empty)';
+                            return (
+                              <tr key={key} className="hover:bg-slate-50/60">
+                                <td className="py-2.5 px-4 font-semibold text-slate-800 capitalize font-sans">
+                                  {key.replace(/_/g, ' ')}
+                                </td>
+                                <td className="py-2.5 px-4 text-slate-400 line-through">
+                                  {String(prevVal)}
+                                </td>
+                                <td className="py-2.5 px-4 text-teal-800 font-bold bg-teal-50/40">
+                                  {String(newVal)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Attached Proof Documents */}
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-slate-800">
+                      Attached Proof Documents ({amend.documents?.length || 0}):
+                    </span>
+                    {!amend.documents || amend.documents.length === 0 ? (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 flex items-center space-x-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                        <span>No KYC proof documents attached to this amendment request.</span>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {amend.documents.map((doc) => (
+                          <div
+                            key={doc.id}
+                            className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1 text-xs"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-900 truncate">{doc.document_name}</span>
+                              <span className="px-2 py-0.5 rounded bg-teal-100 text-teal-800 text-[10px] font-bold">
+                                {doc.document_type}
+                              </span>
+                            </div>
+                            <div className="p-1.5 bg-white rounded border border-slate-200 text-[10px] font-mono text-slate-600 flex items-center justify-between">
+                              <span className="truncate">SHA: {doc.sha256_hash}</span>
+                              <Lock className="w-3 h-3 text-emerald-600 flex-shrink-0 ml-1" />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Review Actions */}
+                  {amend.status === 'PENDING' && (
+                    <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-100">
+                      <button
+                        onClick={() => {
+                          setRejectingAmendId(amend.id);
+                          setRejectionReason('');
+                        }}
+                        className="px-4 py-2 bg-white border border-rose-300 text-rose-700 hover:bg-rose-50 text-xs font-semibold rounded-lg transition flex items-center space-x-1.5 shadow-xs"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                        <span>Reject Request</span>
+                      </button>
+                      <button
+                        onClick={() => handleReviewAmendment(amend.id, true)}
+                        className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg shadow-sm transition flex items-center space-x-1.5"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Approve & Update Identity</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {amend.status === 'APPROVED' && (
+                    <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center space-x-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+                      <span>
+                        Approved by <strong>{amend.reviewed_by || 'System Admin'}</strong> on{' '}
+                        {amend.reviewed_at ? new Date(amend.reviewed_at).toLocaleString() : 'N/A'}. Database profile updated and W3C credential re-minted.
+                      </span>
+                    </div>
+                  )}
+
+                  {amend.status === 'REJECTED' && (
+                    <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 flex items-start space-x-2">
+                      <XCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold">Rejected by {amend.reviewed_by || 'System Admin'}: </span>
+                        <span>{amend.rejection_reason || 'Verification standards not met.'}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* TAB 3: Duplicate Queue */}
       {activeTab === 'duplicates' && (
         <div className="space-y-6">
           {duplicates.length === 0 ? (
@@ -675,6 +893,59 @@ export default function AdminPage() {
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Modal */}
+      {rejectingAmendId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center space-x-2 text-rose-700">
+                <XCircle className="w-5 h-5" />
+                <h3 className="font-bold text-slate-900 text-base">Reject Amendment Request</h3>
+              </div>
+              <button
+                onClick={() => setRejectingAmendId(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="my-4 space-y-3">
+              <p className="text-xs text-slate-600">
+                Provide a reason for rejection. This feedback will be sent directly to the citizen via real-time stream.
+              </p>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Rejection Reason</label>
+                <textarea
+                  rows={3}
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="e.g. Document image is illegible or name in proof does not match requested string."
+                  className="w-full text-xs p-2.5 rounded-lg border border-slate-300 focus:ring-1 focus:ring-rose-600 focus:border-rose-600"
+                />
+              </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setRejectingAmendId(null)}
+                className="px-4 py-2 rounded-lg text-slate-600 hover:bg-slate-100 text-xs font-semibold transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleReviewAmendment(rejectingAmendId, false, rejectionReason)}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-lg shadow-sm transition"
+              >
+                Confirm Rejection
+              </button>
+            </div>
           </div>
         </div>
       )}
