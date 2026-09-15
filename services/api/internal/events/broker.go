@@ -9,9 +9,10 @@ import (
 type EventType string
 
 const (
-	EventConsentRequested EventType = "CONSENT_REQUEST_CREATED"
-	EventConsentResponded EventType = "CONSENT_REQUEST_RESPONDED"
-	EventIdentityUpdated  EventType = "IDENTITY_UPDATED"
+	EventConsentRequested        EventType = "CONSENT_REQUEST_CREATED"
+	EventConsentResponded        EventType = "CONSENT_REQUEST_RESPONDED"
+	EventIdentityUpdated         EventType = "IDENTITY_UPDATED"
+	EventAmendmentStatusChanged EventType = "AMENDMENT_STATUS_CHANGED"
 )
 
 type Event struct {
