@@ -36,19 +36,32 @@ func main() {
 	var auditRepo repository.AuditRepository
 	var dedupRepo repository.DuplicateRepository
 
-	// Attempt PostgreSQL connection
+	// Attempt PostgreSQL connection with retry loop
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
 		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName, cfg.DBSSLMode,
 	)
 	db, err := sql.Open("postgres", dsn)
 	var dbConnected bool
+	var lastPingErr error
 	if err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if pingErr := db.PingContext(ctx); pingErr == nil {
-			dbConnected = true
-			log.Printf("[INFO] Connected to PostgreSQL on %s:%s", cfg.DBHost, cfg.DBPort)
+		for attempt := 1; attempt <= 5; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if pingErr := db.PingContext(ctx); pingErr == nil {
+				dbConnected = true
+				log.Printf("[INFO] Connected to PostgreSQL on %s:%s (attempt %d/5)", cfg.DBHost, cfg.DBPort, attempt)
+				cancel()
+				break
+			} else {
+				lastPingErr = pingErr
+				if attempt < 5 {
+					log.Printf("[INFO] Waiting for PostgreSQL at %s:%s (attempt %d/5: %v)...", cfg.DBHost, cfg.DBPort, attempt, pingErr)
+					time.Sleep(1500 * time.Millisecond)
+				}
+			}
+			cancel()
 		}
-		cancel()
+	} else {
+		lastPingErr = err
 	}
 
 	if dbConnected {
@@ -68,7 +81,7 @@ func main() {
 		auditRepo = pgStore.Audit
 		dedupRepo = pgStore.Duplicates
 	} else {
-		log.Printf("[WARN] PostgreSQL not available (%v). Initializing resilient disk-backed database...", err)
+		log.Printf("[WARN] PostgreSQL not available (%v). Initializing resilient disk-backed database...", lastPingErr)
 		memStore := repository.NewMemoryStore()
 		dataPath := cfg.DataPath
 		loaded, loadErr := memStore.LoadFromFile(dataPath)
@@ -161,6 +174,7 @@ func main() {
 			r.Post("/verification-requests", h.CreateVerificationRequest)
 			r.Get("/verification-requests/pending", h.ListPendingVerificationRequests)
 			r.Post("/verification-requests/{id}/respond", h.RespondVerificationRequest)
+			r.Get("/events/stream", h.EventsStream)
 		})
 
 		// Admin Privileged Endpoints
