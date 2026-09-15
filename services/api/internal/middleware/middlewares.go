@@ -315,7 +315,14 @@ func AuthMiddleware(authSvc *service.AuthService) func(http.Handler) http.Handle
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			var tokenString string
+			if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+				tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+			} else if qToken := r.URL.Query().Get("token"); qToken != "" {
+				tokenString = qToken
+			}
+
+			if tokenString == "" {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -327,7 +334,6 @@ func AuthMiddleware(authSvc *service.AuthService) func(http.Handler) http.Handle
 				return
 			}
 
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 			claims, err := authSvc.ValidateToken(tokenString)
 			if err != nil {
 				w.Header().Set("Content-Type", "application/json")
