@@ -76,3 +76,19 @@ type DuplicateRepository interface {
 	ListPending(ctx context.Context) ([]*domain.DuplicateFlag, error)
 	ResolveFlag(ctx context.Context, id uuid.UUID, status string, reviewerID uuid.UUID) error
 }
+
+type DocumentRepository interface {
+	Create(ctx context.Context, doc *domain.IdentityDocument) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.IdentityDocument, error)
+	ListByIdentityID(ctx context.Context, identityID uuid.UUID) ([]*domain.IdentityDocument, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
+}
+
+type AmendmentRepository interface {
+	Create(ctx context.Context, req *domain.AmendmentRequest) error
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.AmendmentRequest, error)
+	ListByIdentityID(ctx context.Context, identityID uuid.UUID) ([]*domain.AmendmentRequest, error)
+	ListPending(ctx context.Context) ([]*domain.AmendmentRequest, error)
+	ListAll(ctx context.Context, limit, offset int) ([]*domain.AmendmentRequest, int, error)
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string, reviewerID *uuid.UUID, rejectionReason string) error
+}
