@@ -39,6 +39,13 @@ const (
 	RequestStatusExpired  = "EXPIRED"
 )
 
+// Identity Amendment Request Statuses
+const (
+	AmendmentStatusPending  = "PENDING_REVIEW"
+	AmendmentStatusApproved = "APPROVED"
+	AmendmentStatusRejected = "REJECTED"
+)
+
 // User represents an authentication principal
 type User struct {
 	ID           uuid.UUID `json:"id"`
@@ -179,4 +186,35 @@ type DuplicateFlag struct {
 	SuspectedEkaID       string                 `json:"suspected_eka_id,omitempty"`
 	SuspectedName        string                 `json:"suspected_name,omitempty"`
 	SuspectedPhoto       string                 `json:"suspected_photo,omitempty"`
+}
+
+// IdentityDocument represents a verified supporting proof document
+type IdentityDocument struct {
+	ID           uuid.UUID `json:"id"`
+	IdentityID   uuid.UUID `json:"identity_id"`
+	DocumentType string    `json:"document_type"` // PASSPORT, NATIONAL_ID, BIRTH_CERTIFICATE, GAZETTE_NOTIFICATION, UTILITY_BILL, MARRIAGE_CERTIFICATE, OTHER
+	DocumentName string    `json:"document_name"`
+	MimeType     string    `json:"mime_type"`
+	FileSize     int64     `json:"file_size"`
+	SHA256Hash   string    `json:"sha256_hash"`           // Cryptographic SHA-256 integrity hash
+	FileContent  string    `json:"file_content,omitempty"` // Base64 or local storage path
+	Status       string    `json:"status"`                 // PENDING, VERIFIED, REJECTED
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// AmendmentRequest represents a formal user request to update verified profile attributes
+type AmendmentRequest struct {
+	ID               uuid.UUID              `json:"id"`
+	IdentityID       uuid.UUID              `json:"identity_id"`
+	EkaID            string                 `json:"eka_id,omitempty"`
+	RequestedChanges map[string]interface{} `json:"requested_changes"` // e.g. {"legal_name": "Jonathan Mathew", "date_of_birth": "1992-05-14"}
+	CurrentValues    map[string]interface{} `json:"current_values"`    // Snapshot of previous values before change
+	Justification    string                 `json:"justification"`
+	DocumentIDs      []uuid.UUID            `json:"document_ids"`
+	Status           string                 `json:"status"` // PENDING_REVIEW, APPROVED, REJECTED
+	ReviewedBy       *uuid.UUID             `json:"reviewed_by,omitempty"`
+	ReviewedAt       *time.Time             `json:"reviewed_at,omitempty"`
+	RejectionReason  string                 `json:"rejection_reason,omitempty"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
