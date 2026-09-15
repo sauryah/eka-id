@@ -72,6 +72,35 @@ export interface QRVerificationResult {
   verifiable_presentation?: W3CVerifiablePresentation;
 }
 
+export interface IdentityDocument {
+  id: string;
+  identity_id: string;
+  document_type: string;
+  document_name: string;
+  mime_type: string;
+  file_size: number;
+  sha256_hash: string;
+  file_content?: string;
+  status: string;
+  created_at: string;
+}
+
+export interface AmendmentRequest {
+  id: string;
+  identity_id: string;
+  eka_id?: string;
+  requested_changes: Record<string, any>;
+  current_values: Record<string, any>;
+  justification: string;
+  document_ids: string[];
+  status: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  rejection_reason?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AuditEvent {
   event_id: string;
   actor_id?: string;
@@ -344,5 +373,88 @@ export async function adminListAudit(token: string) {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error('Failed to load audit events');
+  return res.json();
+}
+
+// --- Supporting Documents & Profile Amendment APIs ---
+
+export async function uploadIdentityDocument(token: string, payload: {
+  document_type: string;
+  document_name: string;
+  mime_type: string;
+  file_content: string; // Base64
+}): Promise<IdentityDocument> {
+  const res = await fetch(`${API_BASE}/api/v1/identities/me/documents`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Failed to upload document');
+  }
+  return res.json();
+}
+
+export async function listMyDocuments(token: string): Promise<IdentityDocument[]> {
+  const res = await fetch(`${API_BASE}/api/v1/identities/me/documents`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('Failed to load documents');
+  return res.json();
+}
+
+export async function createAmendmentRequest(token: string, payload: {
+  requested_changes: Record<string, any>;
+  justification: string;
+  document_ids: string[];
+}): Promise<AmendmentRequest> {
+  const res = await fetch(`${API_BASE}/api/v1/identities/me/amendments`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Failed to submit amendment request');
+  }
+  return res.json();
+}
+
+export async function listMyAmendments(token: string): Promise<AmendmentRequest[]> {
+  const res = await fetch(`${API_BASE}/api/v1/identities/me/amendments`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('Failed to load amendment requests');
+  return res.json();
+}
+
+export async function adminListAmendments(token: string): Promise<{ amendments: AmendmentRequest[]; total: number }> {
+  const res = await fetch(`${API_BASE}/api/v1/admin/amendments?limit=50`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error('Failed to load amendment queue');
+  return res.json();
+}
+
+export async function adminReviewAmendment(token: string, requestId: string, approved: boolean, rejectionReason: string = '') {
+  const res = await fetch(`${API_BASE}/api/v1/admin/amendments/${requestId}/review`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ approved, rejection_reason: rejectionReason }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error?.message || 'Failed to review amendment');
+  }
   return res.json();
 }
