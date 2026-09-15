@@ -9,15 +9,18 @@ const (
 	W3CCredentialsContextV1 = "https://www.w3.org/2018/credentials/v1"
 	W3CDIDContextV1         = "https://www.w3.org/ns/did/v1"
 	W3CSecurityJWS2020      = "https://w3id.org/security/suites/jws-2020/v1"
+	W3CEd25519Context2020   = "https://w3id.org/security/suites/ed25519-2020/v1"
 	EkaIDContextV1          = "https://id.eka.dev/contexts/v1"
 )
 
-// Standard Credential Types
+// Standard Credential Types & Suites
 const (
 	TypeVerifiableCredential     = "VerifiableCredential"
 	TypeEkaIdentityCredential    = "EkaIdentityCredential"
 	TypeEkaVerifiableAttestation = "EkaVerifiableAttestation"
 	TypeVerifiablePresentation   = "VerifiablePresentation"
+	TypeEd25519Signature2020     = "Ed25519Signature2020"
+	TypeEd25519VerificationKey   = "Ed25519VerificationKey2020"
 )
 
 // VerifiableCredential implements the W3C Verifiable Credentials Data Model 1.1 / 2.0
