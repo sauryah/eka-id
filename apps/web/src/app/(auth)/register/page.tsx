@@ -285,7 +285,7 @@ export default function RegisterPage() {
                     >
                       <div className="flex items-center space-x-1 font-bold">
                         <Camera className="w-3.5 h-3.5 text-purple-600" />
-                        <span>Clone John's Face</span>
+                        <span>Clone John&apos;s Face</span>
                       </div>
                       <div className="text-[10px] text-purple-600 font-medium">Test duplicate flag</div>
                     </button>
