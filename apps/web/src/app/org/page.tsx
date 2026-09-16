@@ -225,7 +225,7 @@ export default function OrgPage() {
                 <p><span className="text-slate-500">Status:</span> <span className="text-amber-700 font-bold uppercase">PENDING USER CONSENT</span></p>
               </div>
               <p className="text-amber-800">
-                💡 <strong>Live Test Loop:</strong> Open the user dashboard in another tab (or approve in John Mathew's dashboard). The consent event will stream directly here in real-time!
+                💡 <strong>Live Test Loop:</strong> Open the user dashboard in another tab (or approve in John Mathew&apos;s dashboard). The consent event will stream directly here in real-time!
               </p>
             </div>
           )}
