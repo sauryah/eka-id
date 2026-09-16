@@ -1,4 +1,4 @@
-﻿# Dependencies
+# Dependencies
 node_modules/
 .pnp
 .pnp.js
@@ -11,6 +11,7 @@ coverage/
 out/
 build/
 dist/
+*.tsbuildinfo
 
 # Go build output
 bin/
