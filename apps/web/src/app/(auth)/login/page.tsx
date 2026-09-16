@@ -134,7 +134,7 @@ export default function LoginPage() {
           </div>
 
           <div className="mt-6 text-center text-xs text-slate-500">
-            Don't have an EKA ID yet?{' '}
+            Don&apos;t have an EKA ID yet?{' '}
             <Link href="/register" className="text-teal-700 hover:underline font-semibold">
               Create one now
             </Link>
