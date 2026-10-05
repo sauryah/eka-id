@@ -1,22 +1,18 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Shield, User, QrCode, Building, Lock, LogOut } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 
 export default function Navbar() {
-  const [token, setToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    const saved = localStorage.getItem('eka_token');
-    setToken(saved);
-  }, []);
+  const { isAuthenticated, isAdmin, logout } = useAuth();
+  const router = useRouter();
 
   const handleLogout = () => {
-    localStorage.removeItem('eka_token');
-    localStorage.removeItem('eka_user');
-    setToken(null);
-    window.location.href = '/';
+    logout();
+    router.push('/');
   };
 
   return (
@@ -46,7 +42,7 @@ export default function Navbar() {
             <span>Admin</span>
           </Link>
 
-          {token ? (
+          {isAuthenticated ? (
             <div className="flex items-center space-x-2 border-l border-slate-200 pl-3">
               <Link href="/dashboard" className="flex items-center space-x-1.5 bg-teal-700 hover:bg-teal-800 text-white text-sm font-medium px-3.5 py-1.5 rounded-lg shadow-sm transition">
                 <User className="w-4 h-4" />
