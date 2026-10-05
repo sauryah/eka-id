@@ -2,14 +2,18 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Shield, Lock, Mail, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { loginUser } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { login } = useAuth();
+  const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -18,13 +22,12 @@ export default function LoginPage() {
 
     try {
       const res = await loginUser(email, password);
-      localStorage.setItem('eka_token', res.token);
-      localStorage.setItem('eka_user', JSON.stringify(res.user));
+      login(res.token, res.user);
 
       if (res.user?.role === 'SYSTEM_ADMIN') {
-        window.location.href = '/admin';
+        router.push('/admin');
       } else {
-        window.location.href = '/dashboard';
+        router.push('/dashboard');
       }
     } catch (err: any) {
       setError(err.message || 'Invalid email or password.');
