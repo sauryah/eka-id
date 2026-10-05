@@ -1,4 +1,4 @@
-﻿-- Enable UUID extension
+-- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- Users table
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS profiles (
 CREATE INDEX IF NOT EXISTS idx_profiles_phone ON profiles(phone);
 CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
 CREATE INDEX IF NOT EXISTS idx_profiles_legal_name ON profiles(legal_name);
+CREATE INDEX IF NOT EXISTS idx_profiles_lower_legal_name ON profiles(LOWER(legal_name));
 
 -- Organizations table
 CREATE TABLE IF NOT EXISTS organizations (
@@ -163,3 +164,36 @@ CREATE TABLE IF NOT EXISTS duplicate_flags (
     reviewed_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Identity Documents (Supporting Proofs)
+CREATE TABLE IF NOT EXISTS identity_documents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    identity_id UUID NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    document_type VARCHAR(60) NOT NULL,
+    document_name VARCHAR(255) NOT NULL,
+    mime_type VARCHAR(100) NOT NULL,
+    file_size BIGINT NOT NULL,
+    sha256_hash VARCHAR(64) NOT NULL,
+    file_content TEXT,
+    status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_identity_documents_identity ON identity_documents(identity_id);
+
+-- Identity Amendment Requests
+CREATE TABLE IF NOT EXISTS identity_amendment_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    identity_id UUID NOT NULL REFERENCES identities(id) ON DELETE CASCADE,
+    requested_changes JSONB NOT NULL,
+    current_values JSONB NOT NULL,
+    justification TEXT NOT NULL,
+    document_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status VARCHAR(30) NOT NULL DEFAULT 'PENDING_REVIEW',
+    reviewed_by UUID REFERENCES users(id),
+    reviewed_at TIMESTAMPTZ,
+    rejection_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_amendment_requests_identity ON identity_amendment_requests(identity_id);
+CREATE INDEX IF NOT EXISTS idx_amendment_requests_status ON identity_amendment_requests(status);
