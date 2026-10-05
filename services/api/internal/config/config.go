@@ -22,6 +22,8 @@ type Config struct {
 	JWTSecret          string
 	VerifyURLPrefix    string
 	DataPath           string
+	MockOTPCode        string
+	TrustedProxies     string
 }
 
 func Load() *Config {
@@ -42,6 +44,8 @@ func Load() *Config {
 		JWTSecret:          getEnv("JWT_SECRET", "eka_jwt_dev_super_secret_signing_key_32bytes_minimum_length_2026"),
 		VerifyURLPrefix:    getEnv("VERIFY_URL_PREFIX", "http://localhost:3000/verify"),
 		DataPath:           getEnv("DATA_PATH", "./data/eka_database.json"),
+		MockOTPCode:        getEnv("MOCK_OTP_CODE", "123456"),
+		TrustedProxies:     getEnv("TRUSTED_PROXIES", "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"),
 	}
 }
 
