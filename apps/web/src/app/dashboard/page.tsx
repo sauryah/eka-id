@@ -6,6 +6,8 @@ import {
   Check, X, AlertCircle, Lock, Download, Printer, UserCheck, RefreshCw, Key,
   FileCode, ExternalLink, Copy, Radio, Zap, FileText, Upload, Plus, FileCheck, XCircle
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '@/context/AuthContext';
 import DigitalEkaCard from '@/components/DigitalEkaCard';
 import {
   API_BASE,
@@ -17,6 +19,8 @@ import {
 } from '@/lib/api';
 
 export default function DashboardPage() {
+  const { token, logout } = useAuth();
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<'identity' | 'card' | 'qr' | 'requests' | 'credentials' | 'amendments' | 'privacy'>('identity');
   const [loading, setLoading] = useState(true);
   const [identity, setIdentity] = useState<Identity | null>(null);
@@ -120,19 +124,20 @@ export default function DashboardPage() {
         eventSource.close();
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadDashboardData = async () => {
-    const token = localStorage.getItem('eka_token');
-    if (!token) {
-      window.location.href = '/login';
+    const activeToken = token || (typeof window !== 'undefined' ? localStorage.getItem('eka_token') : null);
+    if (!activeToken) {
+      router.push('/login');
       return;
     }
 
     try {
       setLoading(true);
       setError(null);
-      const data = await getMyIdentity(token);
+      const data = await getMyIdentity(activeToken);
       setIdentity(data.identity);
       setProfile(data.profile);
       setCredentials(data.credentials || []);
@@ -152,7 +157,7 @@ export default function DashboardPage() {
 
       // Load pending verification requests
       try {
-        const reqs = await getPendingVerificationRequests(token);
+        const reqs = await getPendingVerificationRequests(activeToken);
         setRequests(reqs || []);
       } catch (e) {
         console.warn('Could not load pending requests:', e);
@@ -161,8 +166,8 @@ export default function DashboardPage() {
       // Load amendment history & documents
       try {
         const [amendList, docList] = await Promise.all([
-          listMyAmendments(token),
-          listMyDocuments(token),
+          listMyAmendments(activeToken),
+          listMyDocuments(activeToken),
         ]);
         setAmendments(amendList || []);
         setDocuments(docList || []);
@@ -172,7 +177,7 @@ export default function DashboardPage() {
 
       // Initial QR generation
       try {
-        const qr = await generateQRToken(token, ['identity_valid', 'legal_name'], 15);
+        const qr = await generateQRToken(activeToken, ['identity_valid', 'legal_name'], 15);
         setGeneratedQR(qr);
       } catch (e) {
         console.warn('QR auto-generation skipped:', e);
@@ -382,8 +387,8 @@ export default function DashboardPage() {
         <p className="text-sm text-slate-600 mt-1 mb-4">{error}</p>
         <button
           onClick={() => {
-            localStorage.removeItem('eka_token');
-            window.location.href = '/login';
+            logout();
+            router.push('/login');
           }}
           className="px-4 py-2 bg-teal-700 text-white text-sm font-semibold rounded-lg shadow"
         >
