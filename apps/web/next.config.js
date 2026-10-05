@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: 'export',
+  ...(process.env.NEXT_EXPORT === 'true' ? { output: 'export' } : {}),
   images: {
     unoptimized: true,
   },
