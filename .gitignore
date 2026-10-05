@@ -21,8 +21,11 @@ bin/
 *.so
 *.dylib
 *.test
-*.out
 services/api/bin/
+services/api/server
+services/api/server.exe
+server
+server.exe
 
 # Environment files
 .env
