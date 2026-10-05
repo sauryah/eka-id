@@ -129,6 +129,15 @@ func (s *QRService) VerifyToken(ctx context.Context, token, ip, ua, reqID string
 		return nil, ErrQRTokenExpired
 	}
 
+	if qr.IsUsed {
+		_ = s.auditSvc.Record(ctx, nil, "ANONYMOUS", "QR_VERIFICATION_FAILED", "QR_TOKEN", token, "FAILURE", ip, ua, reqID, map[string]interface{}{
+			"reason": "token already used",
+		})
+		return nil, ErrQRTokenUsed
+	}
+
+	_ = s.qrRepo.MarkTokenUsed(ctx, token)
+
 	identity, err := s.identRepo.GetByID(ctx, qr.IdentityID)
 	if err != nil || identity == nil {
 		return nil, ErrIdentityNotFound
