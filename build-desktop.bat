@@ -9,6 +9,7 @@ copy /Y "%~dp0services\api\server.exe" "%~dp0apps\desktop\resources\bin\server.e
 
 echo [2/3] Building Next.js static export...
 cd "%~dp0apps\web"
+set NEXT_EXPORT=true
 call npm.cmd run build
 xcopy /E /I /Y "%~dp0apps\web\out" "%~dp0apps\desktop\web\out"
 
