@@ -1,4 +1,6 @@
-﻿DROP TABLE IF EXISTS duplicate_flags CASCADE;
+DROP TABLE IF EXISTS identity_amendment_requests CASCADE;
+DROP TABLE IF EXISTS identity_documents CASCADE;
+DROP TABLE IF EXISTS duplicate_flags CASCADE;
 DROP TABLE IF EXISTS audit_events CASCADE;
 DROP TABLE IF EXISTS credentials CASCADE;
 DROP TABLE IF EXISTS qr_tokens CASCADE;
