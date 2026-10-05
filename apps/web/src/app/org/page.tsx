@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { Building2, Send, CheckCircle2, AlertCircle, Shield, Key, Search, FileText, Radio, Zap, Clock, UserCheck, XCircle } from 'lucide-react';
 import { API_BASE, createVerificationRequest, loginUser } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 
 export default function OrgPage() {
   const [ekaId, setEkaId] = useState('EKA-7K4M-92PX');
@@ -12,6 +13,7 @@ export default function OrgPage() {
   const [submittedRequest, setSubmittedRequest] = useState<any | null>(null);
   const [liveResponse, setLiveResponse] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { token, isAuthenticated, login } = useAuth();
 
   const toggleScope = (scope: string) => {
     if (scopes.includes(scope)) {
@@ -21,16 +23,34 @@ export default function OrgPage() {
     }
   };
 
+  const handleDemoRecruiterAuth = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      let auth;
+      try {
+        auth = await loginUser('sarah.recruiter@acme.example.com', 'Password123!');
+      } catch (authErr) {
+        auth = await loginUser('admin@eka.dev', 'Password123!');
+      }
+      login(auth.token, auth.user);
+    } catch (err: any) {
+      setError(err.message || 'Failed to authenticate recruiter.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Real-Time SSE Listener for Request Consent Response
   useEffect(() => {
     if (!submittedRequest?.id) return;
 
-    const token = typeof window !== 'undefined' ? localStorage.getItem('eka_token') : null;
-    if (!token) return;
+    const activeToken = token || (typeof window !== 'undefined' ? localStorage.getItem('eka_token') : null);
+    if (!activeToken) return;
 
     let eventSource: EventSource | null = null;
     try {
-      const sseUrl = `${API_BASE}/api/v1/events/stream?token=${encodeURIComponent(token)}&topic=${encodeURIComponent(submittedRequest.id)}`;
+      const sseUrl = `${API_BASE}/api/v1/events/stream?token=${encodeURIComponent(activeToken)}&topic=${encodeURIComponent(submittedRequest.id)}`;
       eventSource = new EventSource(sseUrl);
 
       eventSource.addEventListener('CONSENT_REQUEST_RESPONDED', (e: MessageEvent) => {
@@ -52,7 +72,7 @@ export default function OrgPage() {
         eventSource.close();
       }
     };
-  }, [submittedRequest]);
+  }, [submittedRequest, token]);
 
   const handleCreateRequest = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,21 +82,10 @@ export default function OrgPage() {
     setLoading(true);
 
     try {
-      let token = localStorage.getItem('eka_token');
-      if (!token) {
-        // Auto-authenticate as Acme recruiter for seamless testing
-        try {
-          const auth = await loginUser('sarah.recruiter@acme.example.com', 'Password123!');
-          token = auth.token;
-          localStorage.setItem('eka_token', auth.token);
-          localStorage.setItem('eka_user', JSON.stringify(auth.user));
-        } catch (authErr) {
-          // Fallback to standard admin/user credentials
-          const auth = await loginUser('admin@eka.dev', 'Password123!');
-          token = auth.token;
-          localStorage.setItem('eka_token', auth.token);
-          localStorage.setItem('eka_user', JSON.stringify(auth.user));
-        }
+      const activeToken = token || (typeof window !== 'undefined' ? localStorage.getItem('eka_token') : null);
+      if (!activeToken) {
+        setError('Authentication required. Please sign in or use the demo recruiter button to authenticate.');
+        return;
       }
 
       const payload = {
@@ -86,7 +95,7 @@ export default function OrgPage() {
         duration_days: 7,
       };
 
-      const res = await createVerificationRequest(token || '', payload);
+      const res = await createVerificationRequest(activeToken, payload);
       setSubmittedRequest(res);
     } catch (err: any) {
       setError(err.message || 'Failed to submit verification request.');
@@ -129,6 +138,23 @@ export default function OrgPage() {
               The identity holder will be notified in their dashboard and must explicitly grant consent.
             </p>
           </div>
+
+          {!isAuthenticated && (
+            <div className="p-4 rounded-xl bg-teal-50 border border-teal-200 text-teal-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center space-x-2">
+                <Building2 className="w-5 h-5 text-teal-700 flex-shrink-0" />
+                <span>You are currently unauthenticated. Sign in as an authorized recruiter to initiate live verification requests.</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleDemoRecruiterAuth}
+                disabled={loading}
+                className="px-4 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-semibold rounded-lg shadow-sm transition text-xs whitespace-nowrap self-start sm:self-auto"
+              >
+                Sign In as Acme Recruiter
+              </button>
+            </div>
+          )}
 
           {error && (
             <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs">
