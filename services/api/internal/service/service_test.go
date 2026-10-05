@@ -18,6 +18,7 @@ func setupTestServices() (*service.AuthService, *service.IdentityService, *servi
 	idSvc := service.NewIdentityService(mem.Identities, mem.Profiles, auditSvc)
 	dedupSvc := service.NewDeduplicationService(mem.Profiles, mem.Duplicates, mem.Identities, auditSvc)
 	authSvc := service.NewAuthService(mem.Users, idSvc, mem.Profiles, dedupSvc, auditSvc, "test-jwt-secret-32-chars-long!!")
+	authSvc.SetDevMockOTP(true, "123456")
 	qrSvc := service.NewQRService(mem.QR, mem.Identities, mem.Profiles, auditSvc, "https://id.eka.dev/verify")
 	verifSvc := service.NewVerificationService(mem.Verification, mem.Identities, mem.Profiles, auditSvc)
 
@@ -99,6 +100,12 @@ func TestQRVerification_ZeroPIIAndScopes(t *testing.T) {
 	}
 	if _, exists := verifResult.DisclosedClaims["phone"]; exists {
 		t.Fatal("Phone was disclosed despite not being in QR scope!")
+	}
+
+	// Verify that replaying the single-use token fails
+	_, replayErr := qrSvc.VerifyToken(ctx, qrResp.Token, "192.168.1.51", "mobile-scanner", "req-3-replay")
+	if replayErr != service.ErrQRTokenUsed {
+		t.Fatalf("Expected ErrQRTokenUsed on replay, got: %v", replayErr)
 	}
 }
 
@@ -240,5 +247,47 @@ func TestBiometricFacialDeduplication(t *testing.T) {
 	}
 	if !foundBioReason {
 		t.Fatalf("Expected Biometric Face Match reason in %v", flag.MatchReasons)
+	}
+}
+
+func TestOTP_LifecycleAndSecurity(t *testing.T) {
+	mem := repository.NewMemoryStore()
+	auditSvc := service.NewAuditService(mem.Audit)
+	idSvc := service.NewIdentityService(mem.Identities, mem.Profiles, auditSvc)
+	dedupSvc := service.NewDeduplicationService(mem.Profiles, mem.Duplicates, mem.Identities, auditSvc)
+	authSvc := service.NewAuthService(mem.Users, idSvc, mem.Profiles, dedupSvc, auditSvc, "test-jwt-secret-32-chars-long!!")
+	// Production mode: no mock OTP!
+	authSvc.SetDevMockOTP(false, "")
+
+	ctx := context.Background()
+	target := "security.test@example.com"
+
+	// 1. Generate real random OTP
+	otp, err := authSvc.RequestOTP(ctx, target)
+	if err != nil {
+		t.Fatalf("Failed to request OTP: %v", err)
+	}
+	if len(otp) != 6 {
+		t.Fatalf("Expected 6-digit OTP, got: %s", otp)
+	}
+
+	// 2. Reject incorrect OTP
+	if authSvc.VerifyOTP(ctx, target, "000000") {
+		t.Fatal("Expected false for incorrect OTP")
+	}
+
+	// 3. Reject hardcoded dev OTP in production mode
+	if otp != "123456" && authSvc.VerifyOTP(ctx, target, "123456") {
+		t.Fatal("Expected false for hardcoded 123456 OTP in production mode")
+	}
+
+	// 4. Verify correct OTP succeeds
+	if !authSvc.VerifyOTP(ctx, target, otp) {
+		t.Fatal("Expected true for correct OTP")
+	}
+
+	// 5. Verify single-use consumption (second use must fail!)
+	if authSvc.VerifyOTP(ctx, target, otp) {
+		t.Fatal("Expected false on replay of single-use OTP")
 	}
 }
