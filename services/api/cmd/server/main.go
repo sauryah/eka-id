@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -119,6 +122,9 @@ func main() {
 	identSvc := service.NewIdentityService(identRepo, profRepo, auditSvc)
 	dedupSvc := service.NewDeduplicationService(profRepo, dedupRepo, identRepo, auditSvc)
 	authSvc := service.NewAuthService(userRepo, identSvc, profRepo, dedupSvc, auditSvc, cfg.JWTSecret)
+	if cfg.Environment == "development" && cfg.MockOTPCode != "" {
+		authSvc.SetDevMockOTP(true, cfg.MockOTPCode)
+	}
 	qrSvc := service.NewQRService(qrRepo, identRepo, profRepo, auditSvc, cfg.VerifyURLPrefix)
 	verifSvc := service.NewVerificationService(verifRepo, identRepo, profRepo, auditSvc)
 	vcSvc := service.NewVCService(identRepo, profRepo, orgRepo, credRepo, auditSvc, cfg.JWTSecret, cfg.VerifyURLPrefix)
@@ -149,6 +155,23 @@ func main() {
 	r.Get("/health", h.Health)
 	r.Get("/ready", h.Ready)
 	r.Get("/api/v1/docs", serveOpenAPIDocs)
+	r.Get("/api/v1/openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		candidates := []string{
+			"docs/openapi.yaml",
+			"../../docs/openapi.yaml",
+			"../docs/openapi.yaml",
+			"/app/docs/openapi.yaml",
+		}
+		for _, path := range candidates {
+			if data, err := os.ReadFile(path); err == nil {
+				w.Header().Set("Content-Type", "application/yaml")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(data)
+				return
+			}
+		}
+		http.Error(w, "OpenAPI specification file not found", http.StatusNotFound)
+	})
 
 	// Public API v1
 	r.Route("/api/v1", func(r chi.Router) {
@@ -208,11 +231,36 @@ func main() {
 	})
 
 	serverAddr := fmt.Sprintf("%s:%s", cfg.ServerHost, cfg.ServerPort)
-	log.Printf("[INFO] EKA ID Platform API listening at http://%s", serverAddr)
-	log.Printf("[INFO] Interactive OpenAPI Docs available at http://%s/api/v1/docs", serverAddr)
+	srv := &http.Server{
+		Addr:              serverAddr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 
-	if err := http.ListenAndServe(serverAddr, r); err != nil {
-		log.Fatalf("[FATAL] Server terminated: %v", err)
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("[INFO] EKA ID Platform API listening at http://%s", serverAddr)
+		log.Printf("[INFO] Interactive OpenAPI Docs available at http://%s/api/v1/docs", serverAddr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[FATAL] Server terminated: %v", err)
+		}
+	}()
+
+	<-stopChan
+	log.Printf("[INFO] Shutting down EKA ID Platform API server gracefully...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("[ERROR] Server forced to shutdown: %v", err)
+	} else {
+		log.Printf("[INFO] Server exited cleanly.")
 	}
 }
 
@@ -354,7 +402,7 @@ func serveOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
   <script>
     window.onload = () => {
       window.ui = SwaggerUIBundle({
-        url: 'https://raw.githubusercontent.com/sauryah/eka-id/main/docs/openapi.yaml',
+        url: '/api/v1/openapi.yaml',
         dom_id: '#swagger-ui',
       });
     };
