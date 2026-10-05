@@ -7,11 +7,13 @@ import {
   Phone, User, Calendar, Lock, Camera, Sparkles, Scan, Image as ImageIcon
 } from 'lucide-react';
 import { requestOTP, registerUser } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 
 export default function RegisterPage() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { login } = useAuth();
 
   // Form Fields
   const [legalName, setLegalName] = useState('');
@@ -63,8 +65,12 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       const res = await requestOTP(email);
-      setDevOtpHint(res.dev_otp || '123456');
-      setOtpCode(res.dev_otp || '123456');
+      if (res.dev_otp) {
+        setDevOtpHint(res.dev_otp);
+      } else {
+        setDevOtpHint(null);
+      }
+      setOtpCode('');
       setStep(3);
     } catch (err: any) {
       setError(err.message || 'Failed to dispatch OTP');
@@ -75,8 +81,12 @@ export default function RegisterPage() {
 
   const handleFinalSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!password) {
-      setError('Password is required.');
+    if (!password || password.length < 8) {
+      setError('Password must be at least 8 characters long.');
+      return;
+    }
+    if (!otpCode || otpCode.trim().length !== 6) {
+      setError('Please enter the 6-digit OTP verification code.');
       return;
     }
     setError(null);
@@ -90,7 +100,7 @@ export default function RegisterPage() {
         email,
         phone,
         password,
-        otp_code: otpCode,
+        otp_code: otpCode.trim(),
         country: 'India',
         profile_photo_url: profilePhotoUrl,
         metadata: {
@@ -101,8 +111,7 @@ export default function RegisterPage() {
 
       const res = await registerUser(payload);
       setCreatedEkaId(res.identity.eka_id);
-      localStorage.setItem('eka_token', res.token);
-      localStorage.setItem('eka_user', JSON.stringify(res.user));
+      login(res.token, res.user);
       setStep(4); // Success step
     } catch (err: any) {
       setError(err.message || 'Registration failed.');
