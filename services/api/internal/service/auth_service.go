@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,6 +31,12 @@ type JWTClaims struct {
 	jwt.RegisteredClaims
 }
 
+type OTPEntry struct {
+	Code      string
+	ExpiresAt time.Time
+	Attempts  int
+}
+
 type AuthService struct {
 	userRepo  repository.UserRepository
 	identSvc  *IdentityService
@@ -37,8 +44,10 @@ type AuthService struct {
 	dedupSvc  *DeduplicationService
 	auditSvc  *AuditService
 	jwtSecret []byte
-	otpStore  map[string]string
+	otpStore  map[string]*OTPEntry
 	otpMu     sync.RWMutex
+	devMode   bool
+	mockOTP   string
 }
 
 func NewAuthService(
@@ -56,16 +65,43 @@ func NewAuthService(
 		dedupSvc:  dedupSvc,
 		auditSvc:  auditSvc,
 		jwtSecret: []byte(jwtSecret),
-		otpStore:  make(map[string]string),
+		otpStore:  make(map[string]*OTPEntry),
 	}
+}
+
+// SetDevMockOTP enables developer/testing mock OTP behavior
+func (s *AuthService) SetDevMockOTP(enabled bool, mockCode string) {
+	s.otpMu.Lock()
+	defer s.otpMu.Unlock()
+	s.devMode = enabled
+	s.mockOTP = mockCode
 }
 
 func (s *AuthService) RequestOTP(ctx context.Context, target string) (string, error) {
 	cleanTarget := strings.TrimSpace(strings.ToLower(target))
-	otp := "123456"
+	if cleanTarget == "" {
+		return "", errors.New("target is required")
+	}
+
+	var otp string
+	if s.devMode && s.mockOTP != "" {
+		otp = s.mockOTP
+	} else {
+		// Generate cryptographically secure 6-digit random code
+		b := make([]byte, 4)
+		if _, err := rand.Read(b); err != nil {
+			return "", fmt.Errorf("failed to generate secure random otp: %w", err)
+		}
+		val := (uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]))%900000 + 100000
+		otp = fmt.Sprintf("%06d", val)
+	}
 
 	s.otpMu.Lock()
-	s.otpStore[cleanTarget] = otp
+	s.otpStore[cleanTarget] = &OTPEntry{
+		Code:      otp,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+		Attempts:  0,
+	}
 	s.otpMu.Unlock()
 
 	return otp, nil
@@ -73,14 +109,42 @@ func (s *AuthService) RequestOTP(ctx context.Context, target string) (string, er
 
 func (s *AuthService) VerifyOTP(ctx context.Context, target, code string) bool {
 	cleanTarget := strings.TrimSpace(strings.ToLower(target))
-	s.otpMu.RLock()
-	expected, exists := s.otpStore[cleanTarget]
-	s.otpMu.RUnlock()
-
-	if !exists {
-		return code == "123456"
+	cleanCode := strings.TrimSpace(code)
+	if cleanCode == "" {
+		return false
 	}
-	return expected == code || code == "123456"
+
+	s.otpMu.Lock()
+	defer s.otpMu.Unlock()
+
+	entry, exists := s.otpStore[cleanTarget]
+	if !exists {
+		// If in dev mode with mock OTP enabled and mock code matches
+		if s.devMode && s.mockOTP != "" && cleanCode == s.mockOTP {
+			return true
+		}
+		return false
+	}
+
+	// Check expiration (5 minutes TTL)
+	if time.Now().After(entry.ExpiresAt) {
+		delete(s.otpStore, cleanTarget)
+		return false
+	}
+
+	// Check maximum attempts (brute force mitigation: 5 attempts max)
+	if entry.Attempts >= 5 {
+		delete(s.otpStore, cleanTarget)
+		return false
+	}
+
+	if entry.Code == cleanCode {
+		delete(s.otpStore, cleanTarget) // Single-use consumption!
+		return true
+	}
+
+	entry.Attempts++
+	return false
 }
 
 type RegistrationInput struct {
