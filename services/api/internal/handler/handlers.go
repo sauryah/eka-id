@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sauryah/eka-id/services/api/internal/domain"
 	"github.com/sauryah/eka-id/services/api/internal/events"
 	"github.com/sauryah/eka-id/services/api/internal/middleware"
 	"github.com/sauryah/eka-id/services/api/internal/repository"
@@ -117,11 +118,14 @@ func (h *Handlers) RequestOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	JSON(w, http.StatusOK, map[string]interface{}{
+	resp := map[string]interface{}{
 		"message": "Verification code dispatched",
-		"dev_otp": otp, // Provided for local development & testing ease
 		"target":  body.Target,
-	})
+	}
+	if otp == "123456" {
+		resp["dev_otp"] = otp
+	}
+	JSON(w, http.StatusOK, resp)
 }
 
 func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +468,9 @@ func (h *Handlers) EventsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// Disable write deadline for long-lived SSE streaming
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
 
 	broker := events.GetBroker()
 
@@ -472,13 +478,37 @@ func (h *Handlers) EventsStream(w http.ResponseWriter, r *http.Request) {
 	if claims.IdentityID != uuid.Nil {
 		topics = append(topics, claims.IdentityID.String())
 	}
-	if customTopic := r.URL.Query().Get("topic"); customTopic != "" {
-		topics = append(topics, customTopic)
-	}
 
+	var userEkaID string
 	if claims.IdentityID != uuid.Nil {
 		if ident, err := h.identSvc.GetByID(r.Context(), claims.IdentityID); err == nil && ident != nil {
-			topics = append(topics, ident.EkaID)
+			userEkaID = ident.EkaID
+			topics = append(topics, userEkaID)
+		}
+	}
+
+	if customTopic := r.URL.Query().Get("topic"); customTopic != "" {
+		// Strict authorization: only admins can listen to arbitrary topics;
+		// normal users can only subscribe to their own user ID, identity ID, or EKA ID.
+		isAuthorized := claims.Role == domain.RoleSystemAdmin ||
+			customTopic == claims.UserID.String() ||
+			(claims.IdentityID != uuid.Nil && customTopic == claims.IdentityID.String()) ||
+			(userEkaID != "" && customTopic == userEkaID)
+
+		if !isAuthorized {
+			ErrorResponse(w, http.StatusForbidden, "FORBIDDEN_TOPIC", "Cannot subscribe to topics outside your authorization scope", "")
+			return
+		}
+		// Avoid duplicate topic subscriptions
+		hasTopic := false
+		for _, t := range topics {
+			if t == customTopic {
+				hasTopic = true
+				break
+			}
+		}
+		if !hasTopic {
+			topics = append(topics, customTopic)
 		}
 	}
 
@@ -751,6 +781,7 @@ func (h *Handlers) UploadDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	contentType := r.Header.Get("Content-Type")
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // Enforce strict 10MB upload payload limit
 	var docType, docName, mimeType string
 	var fileData []byte
 
