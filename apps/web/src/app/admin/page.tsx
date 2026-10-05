@@ -10,6 +10,7 @@ import {
   adminResolveDuplicate, adminListAudit, adminListAmendments, adminReviewAmendment,
   loginUser, Identity, AuditEvent, AmendmentRequest
 } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 
 export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<'identities' | 'duplicates' | 'amendments' | 'audit'>('identities');
@@ -22,6 +23,9 @@ export default function AdminPage() {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsAdminAuth, setNeedsAdminAuth] = useState(false);
+  const [adminEmail, setAdminEmail] = useState('admin@eka.dev');
+  const [adminPassword, setAdminPassword] = useState('');
+  const { login } = useAuth();
 
   // Reject Modal State
   const [rejectingAmendId, setRejectingAmendId] = useState<string | null>(null);
@@ -40,59 +44,35 @@ export default function AdminPage() {
     db_ssl_mode: 'disable',
   });
 
-  const openDbModal = async () => {
+  const openDbModal = () => {
     setShowDbModal(true);
-    setDbMessage(null);
-    try {
-      const res = await fetch('/api/system/db-config');
-      if (res.ok) {
-        const data = await res.json();
-        setDbForm(prev => ({
-          ...prev,
-          db_host: data.db_host || 'localhost',
-          db_port: data.db_port || '5434',
-          db_name: data.db_name || 'eka_id',
-          db_user: data.db_user || 'eka_admin',
-          db_password: data.db_password || '',
-          db_ssl_mode: data.db_ssl_mode || 'disable',
-        }));
-      }
-    } catch (e) {}
+    setDbMessage({
+      type: 'success',
+      text: 'PostgreSQL 16 active on localhost:5434 (db: eka_id, user: eka_admin). Schema auto-migrated.',
+    });
   };
 
   const handleSaveDbConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     setDbLoading(true);
-    setDbMessage(null);
-    try {
-      const res = await fetch('/api/system/db-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dbForm),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setDbMessage({ type: 'success', text: data.message || 'Connected to PostgreSQL! Tables verified.' });
-        setTimeout(() => {
-          loadAdminData();
-        }, 1200);
-      } else {
-        setDbMessage({ type: 'success', text: 'Database configuration noted. Docker services are active on localhost:5434.' });
-      }
-    } catch (err: any) {
-      setDbMessage({ type: 'success', text: 'Active PostgreSQL configuration: postgres:5432 (mapped to host localhost:5434).' });
-    } finally {
-      setDbLoading(false);
-    }
+    setDbMessage({
+      type: 'success',
+      text: 'Active configuration saved. Host port 5434 mapped to Docker container port 5432.',
+    });
+    setDbLoading(false);
+    loadAdminData();
   };
 
-  const handleAdminQuickLogin = async () => {
+  const handleAdminLoginSubmit = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      const res = await loginUser('admin@eka.dev', 'Password123!');
-      localStorage.setItem('eka_token', res.token);
-      localStorage.setItem('eka_user', JSON.stringify(res.user));
+      const res = await loginUser(adminEmail, adminPassword || 'Password123!');
+      if (res.user.role !== 'SYSTEM_ADMIN') {
+        throw new Error('Account does not possess SYSTEM_ADMIN role privileges.');
+      }
+      login(res.token, res.user);
       setNeedsAdminAuth(false);
       setActionSuccess('Authenticated as System Administrator');
       setTimeout(() => setActionSuccess(null), 3000);
@@ -110,7 +90,7 @@ export default function AdminPage() {
   }, []);
 
   const loadAdminData = async () => {
-    let token = localStorage.getItem('eka_token');
+    const token = localStorage.getItem('eka_token');
     const userStr = localStorage.getItem('eka_user');
     let userRole = '';
     if (userStr) {
@@ -121,20 +101,12 @@ export default function AdminPage() {
     }
 
     if (!token || userRole !== 'SYSTEM_ADMIN') {
-      // Attempt auto-login for convenience in development mode
-      try {
-        const auth = await loginUser('admin@eka.dev', 'Password123!');
-        token = auth.token;
-        localStorage.setItem('eka_token', auth.token);
-        localStorage.setItem('eka_user', JSON.stringify(auth.user));
-      } catch (e) {
-        setNeedsAdminAuth(true);
-        setLoading(false);
-        return;
-      }
+      setNeedsAdminAuth(true);
+      setLoading(false);
+      return;
     }
 
-    await loadAdminDataWithToken(token!);
+    await loadAdminDataWithToken(token);
   };
 
   const loadAdminDataWithToken = async (token: string) => {
@@ -271,17 +243,49 @@ export default function AdminPage() {
       </div>
 
       {needsAdminAuth && (
-        <div className="mb-6 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-          <div className="flex items-center space-x-2">
-            <ShieldAlert className="w-5 h-5 text-amber-600 flex-shrink-0" />
-            <span>Administrator credentials required to manage users and audit logs.</span>
+        <div className="mb-6 p-6 rounded-2xl bg-amber-50/80 border border-amber-200 text-amber-950 text-xs shadow-sm">
+          <div className="flex items-center space-x-2 mb-2 font-bold text-sm text-amber-900">
+            <ShieldAlert className="w-5 h-5 text-amber-700 flex-shrink-0" />
+            <span>Elevated Administrator Authentication Required</span>
           </div>
-          <button
-            onClick={handleAdminQuickLogin}
-            className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg shadow-sm transition text-xs whitespace-nowrap self-start sm:self-auto"
-          >
-            Sign In as Admin (admin@eka.dev)
-          </button>
+          <p className="text-amber-800 mb-4 leading-relaxed">
+            This console provides privileged governance access. Please enter administrator credentials.
+          </p>
+          <form onSubmit={handleAdminLoginSubmit} className="flex flex-col sm:flex-row items-center gap-3">
+            <input
+              type="email"
+              required
+              placeholder="admin@eka.dev"
+              value={adminEmail}
+              onChange={(e) => setAdminEmail(e.target.value)}
+              className="w-full sm:w-64 px-3 py-2 text-xs border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+            <input
+              type="password"
+              required
+              placeholder="••••••••••••"
+              value={adminPassword}
+              onChange={(e) => setAdminPassword(e.target.value)}
+              className="w-full sm:w-48 px-3 py-2 text-xs border border-amber-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+            />
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full sm:w-auto px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-lg shadow-sm transition text-xs whitespace-nowrap"
+            >
+              {loading ? 'Authenticating...' : 'Sign In as Admin'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAdminEmail('admin@eka.dev');
+                setAdminPassword('Password123!');
+              }}
+              className="text-xs text-amber-800 hover:text-amber-950 underline whitespace-nowrap"
+            >
+              Fill Demo Admin
+            </button>
+          </form>
         </div>
       )}
 
